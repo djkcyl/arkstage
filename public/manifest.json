@@ -1,0 +1,10 @@
+{
+  "name": "PRTS 剧情阅读器",
+  "short_name": "PRTS Reader",
+  "description": "明日方舟剧情离线阅读器",
+  "theme_color": "#1a1a1a",
+  "background_color": "#000000",
+  "display": "standalone",
+  "orientation": "landscape",
+  "start_url": "/"
+}

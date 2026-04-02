@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "prts-reader",
+  "version": "0.1.0",
+  "identifier": "com.prts.reader",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "PRTS 剧情阅读器",
+        "width": 1024,
+        "height": 600,
+        "minWidth": 800,
+        "minHeight": 480,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' asset: https://asset.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://code.jquery.com https://static.prts.wiki asset: https://asset.localhost; style-src 'self' 'unsafe-inline' https://static.prts.wiki asset: https://asset.localhost; img-src 'self' https://media.prts.wiki https://static.prts.wiki asset: https://asset.localhost data:; media-src 'self' https://torappu.prts.wiki asset: https://asset.localhost; font-src 'self' https://static.prts.wiki asset: https://asset.localhost; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
