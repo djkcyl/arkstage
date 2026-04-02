@@ -29,3 +29,4 @@ _reference/
 *.njsproj
 *.sln
 *.sw?
+.playwright-mcp/

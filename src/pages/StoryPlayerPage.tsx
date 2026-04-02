@@ -107,7 +107,7 @@ export default function StoryPlayerPage() {
         let bundle: WidgetBundle;
 
         const cachedBundle = await invoke<string | null>("load_from_cache", {
-          key: "widget-bundle",
+          key: "widget-bundle-v2",
         });
 
         if (cachedBundle) {
@@ -117,7 +117,7 @@ export default function StoryPlayerPage() {
             pageTitle: "W2G/BEG",
           });
           await invoke("save_to_cache", {
-            key: "widget-bundle",
+            key: "widget-bundle-v2",
             data: JSON.stringify(bundle),
           }).catch(() => {});
         }
@@ -203,7 +203,16 @@ export default function StoryPlayerPage() {
         }
 
         // === Step 9: Process RLQ ===
+        // RLQ callbacks run the jQuery document.ready handler which calls
+        // fun_sys_preload() and sets up event listeners.
         processRLQ();
+
+        // === Step 10: Trigger window.onload ===
+        // The engine sets window.onload in script block 2 to initialize the
+        // preload system (system.preload.init). In a SPA, window.onload has
+        // already fired by the time we execute engine scripts, so we must
+        // manually call it or dispatch the event.
+        triggerWindowOnload();
 
         setLoading(false);
       } catch (e) {
@@ -503,6 +512,27 @@ function processRLQ() {
       }
     }
   }
+}
+
+/**
+ * Trigger window.onload for the engine.
+ * The engine sets window.onload in script block 2 to init the preload system.
+ * In a SPA, window.onload has already fired, so we call the handler directly
+ * and also dispatch the event for any addEventListener-based listeners.
+ */
+function triggerWindowOnload() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as any;
+  // Call the direct onload handler if set by engine
+  if (typeof w.onload === "function") {
+    try {
+      w.onload(new Event("load"));
+    } catch (e) {
+      console.warn("window.onload error:", e);
+    }
+  }
+  // Also dispatch load event for addEventListener listeners
+  window.dispatchEvent(new Event("load"));
 }
 
 function cleanupEngineTimers() {

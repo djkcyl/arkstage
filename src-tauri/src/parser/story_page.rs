@@ -65,6 +65,8 @@ pub fn extract_widget_html(html: &str) -> WidgetBundle {
     let document = Html::parse_document(html);
 
     // 1) Extract the main widget DOM: #sys_fullscreen container + #sys_audio
+    //    Use .inner_html() to get the children only, then re-wrap with correct outer tag.
+    //    Using .html() would include the outer tag itself, causing double-wrapping.
     let dom_html = {
         let fullscreen_sel = Selector::parse("#sys_fullscreen").unwrap();
         let audio_sel = Selector::parse("#sys_audio").unwrap();
@@ -72,13 +74,13 @@ pub fn extract_widget_html(html: &str) -> WidgetBundle {
         let fullscreen = document
             .select(&fullscreen_sel)
             .next()
-            .map(|el| el.html())
+            .map(|el| el.inner_html())
             .unwrap_or_default();
 
         let audio = document
             .select(&audio_sel)
             .next()
-            .map(|el| el.html())
+            .map(|el| el.inner_html())
             .unwrap_or_default();
 
         format!(

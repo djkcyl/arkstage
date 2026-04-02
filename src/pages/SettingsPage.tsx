@@ -48,7 +48,7 @@ export default function SettingsPage() {
       // Cache widget bundle
       const bundle = await invoke("fetch_widget_bundle", { pageTitle: "W2G/BEG" });
       await invoke("save_to_cache", {
-        key: "widget-bundle",
+        key: "widget-bundle-v2",
         data: JSON.stringify(bundle),
       });
 
