@@ -79,6 +79,25 @@ pub async fn get_asset_path(
     }
 }
 
+/// Read a cached text asset and return its content as a string.
+#[tauri::command]
+pub async fn read_asset_text(
+    category: String,
+    filename: String,
+    app: AppHandle,
+) -> Result<Option<String>, String> {
+    let dir = assets_dir(&app)?;
+    let path = dir.join(&category).join(&filename);
+
+    if path.exists() {
+        std::fs::read_to_string(&path)
+            .map(Some)
+            .map_err(|e| format!("Failed to read asset: {}", e))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Batch download multiple assets. Returns the number of successfully downloaded assets.
 #[tauri::command]
 pub async fn batch_download_assets(

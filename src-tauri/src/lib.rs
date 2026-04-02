@@ -33,6 +33,7 @@ pub fn run() {
             // Asset management
             assets::download_asset,
             assets::get_asset_path,
+            assets::read_asset_text,
             assets::batch_download_assets,
         ])
         .run(tauri::generate_context!())

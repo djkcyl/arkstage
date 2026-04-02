@@ -132,26 +132,11 @@ export default function StoryPlayerPage() {
 
         // === Step 4: Load font + CSS ===
         // Download & inject font locally to avoid CORS issues
-        if (!document.querySelector(`style[data-prts-font]`)) {
-          const fontUrl = await ensureFontCached();
-          if (fontUrl) {
-            const fontStyle = document.createElement("style");
-            fontStyle.setAttribute("data-prts-font", "1");
-            fontStyle.textContent = `@font-face { font-family: NotoSans; src: url("${fontUrl}"); font-weight: normal; }`;
-            document.head.appendChild(fontStyle);
-            addedElements.push(fontStyle);
-          }
-        }
+        const fontUrl = await ensureFontCached();
 
-        if (!document.querySelector(`link[data-prts-css]`)) {
-          const cssUrl = await resolveAssetUrl(EXTERNALS.css);
-          const link = document.createElement("link");
-          link.rel = "stylesheet";
-          link.type = "text/css";
-          link.href = cssUrl;
-          link.setAttribute("data-prts-css", "1");
-          document.head.appendChild(link);
-          addedElements.push(link);
+        if (!document.querySelector(`style[data-prts-css]`)) {
+          const cssEl = await loadCssWithLocalFont(fontUrl);
+          addedElements.push(cssEl);
         }
 
         // === Step 5: Load JS deps in order ===
@@ -277,6 +262,43 @@ async function ensureFontCached(): Promise<string> {
     // Fall back to remote URL (may fail due to CORS, but worth trying)
     return EXTERNALS.font.url;
   }
+}
+
+/**
+ * Load the scenario CSS. If cached locally, read as text, replace the remote font URL
+ * with the local font URL, and inject as inline <style>. Otherwise load via <link>.
+ */
+async function loadCssWithLocalFont(localFontUrl: string): Promise<HTMLElement> {
+  // Try to read cached CSS text
+  try {
+    const cssText = await invoke<string | null>("read_asset_text", {
+      category: "engine",
+      filename: EXTERNALS.css.filename,
+    });
+    if (cssText) {
+      // Replace remote font URL with local one
+      const patched = cssText.replace(
+        /url\(['"]?https:\/\/static\.prts\.wiki\/assets\/scenario\/fonts\/NotoSans\.ttf['"]?\)/g,
+        `url("${localFontUrl}")`
+      );
+      const style = document.createElement("style");
+      style.setAttribute("data-prts-css", "1");
+      style.textContent = patched;
+      document.head.appendChild(style);
+      return style;
+    }
+  } catch {
+    // Fall through to <link> loading
+  }
+
+  // Fallback: load via <link> (font inside CSS may still CORS-fail)
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.type = "text/css";
+  link.href = EXTERNALS.css.url;
+  link.setAttribute("data-prts-css", "1");
+  document.head.appendChild(link);
+  return link;
 }
 
 /** Try to resolve an asset URL to a locally cached version, fall back to remote. */
