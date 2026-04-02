@@ -6,11 +6,9 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 /**
  * Story player page — loads the ORIGINAL PRTS ScenarioSimulator engine.
  *
- * 1. Fetch widget bundle (DOM + data blocks + engine scripts) — cached
- * 2. Fetch the specific story's script — cached
- * 3. Build player DOM with original structure
- * 4. Load external deps (jQuery, PreloadJS, toolbox.js, CSS) — prefer local cache
- * 5. Execute engine scripts in order — original engine takes over
+ * All CDN requests (static.prts.wiki, media.prts.wiki, torappu.prts.wiki)
+ * are proxied through a Tauri custom protocol handler (prts-cdn://) that
+ * fetches via Rust reqwest with proper Referer header, avoiding 403 errors.
  */
 
 interface WidgetBundle {
@@ -23,6 +21,18 @@ interface StoryPageData {
   script: string;
   title: string;
 }
+
+// Wiki CDN domains that need proxying
+const WIKI_CDN_DOMAINS = [
+  "static.prts.wiki",
+  "media.prts.wiki",
+  "torappu.prts.wiki",
+];
+
+// Proxy base URL: on Windows WebView2 uses http://{scheme}.localhost
+const PROXY_BASE = navigator.userAgent.includes("Windows")
+  ? "http://prts-cdn.localhost"
+  : "prts-cdn://localhost";
 
 // External resources: remote URL + local cache filename
 const EXTERNALS = {
@@ -51,6 +61,28 @@ const EXTERNALS = {
 // Track loaded scripts globally so we don't re-add them on React re-renders
 const loadedScripts = new Set<string>();
 
+/** Rewrite a single CDN URL to use the proxy protocol. */
+function proxyUrl(url: string): string {
+  for (const domain of WIKI_CDN_DOMAINS) {
+    if (url.startsWith(`https://${domain}/`)) {
+      return `${PROXY_BASE}/${domain}/${url.substring(`https://${domain}/`.length)}`;
+    }
+    if (url.startsWith(`http://${domain}/`)) {
+      return `${PROXY_BASE}/${domain}/${url.substring(`http://${domain}/`.length)}`;
+    }
+  }
+  return url;
+}
+
+/** Rewrite ALL CDN URLs in a text block (HTML, CSS, etc.) to proxy URLs. */
+function rewriteAllCdnUrls(text: string): string {
+  for (const domain of WIKI_CDN_DOMAINS) {
+    text = text.replaceAll(`https://${domain}/`, `${PROXY_BASE}/${domain}/`);
+    text = text.replaceAll(`http://${domain}/`, `${PROXY_BASE}/${domain}/`);
+  }
+  return text;
+}
+
 export default function StoryPlayerPage() {
   const { pageTitle } = useParams<{ pageTitle: string }>();
   const navigate = useNavigate();
@@ -66,7 +98,7 @@ export default function StoryPlayerPage() {
 
     let cancelled = false;
     const container = containerRef.current;
-    const addedElements: HTMLElement[] = []; // Track elements we add for cleanup
+    const addedElements: HTMLElement[] = [];
 
     (async () => {
       try {
@@ -125,21 +157,33 @@ export default function StoryPlayerPage() {
           `<pre class="hidden" id="datas_txt">${escapeHtml(storyData.script)}</pre>`
         );
 
+        // Rewrite ALL CDN URLs in data blocks to use proxy
+        dataBlocksHtml = rewriteAllCdnUrls(dataBlocksHtml);
+
+        // Also rewrite CDN URLs in the DOM HTML (UI image references, etc.)
+        const domHtml = rewriteAllCdnUrls(bundle.dom_html);
+
         // firstHeading is read by data.init()
         const headingHtml = `<h1 id="firstHeading" style="display:none"><span class="mw-page-title-main">${escapeHtml(decodedTitle)}</span></h1>`;
 
-        container.innerHTML = headingHtml + bundle.dom_html + dataBlocksHtml;
+        container.innerHTML = headingHtml + domHtml + dataBlocksHtml;
 
-        // === Step 4: Load font + CSS ===
-        // Download & inject font locally to avoid CORS issues
+        // === Step 4: Inject URL rewrite shim ===
+        // Must be BEFORE any JS deps load so they pick up our overrides
+        if (!document.querySelector(`script[data-prts-shim]`)) {
+          const shimEl = injectUrlRewriteShim();
+          addedElements.push(shimEl);
+        }
+
+        // === Step 5: Load font + CSS ===
         const fontUrl = await ensureFontCached();
 
         if (!document.querySelector(`style[data-prts-css]`)) {
-          const cssEl = await loadCssWithLocalFont(fontUrl);
+          const cssEl = await loadCssPatched(fontUrl);
           addedElements.push(cssEl);
         }
 
-        // === Step 5: Load JS deps in order ===
+        // === Step 6: Load JS deps in order ===
         await ensureScript("jquery", EXTERNALS.jquery);
         if (cancelled) return;
         await ensureScript("preloadjs", EXTERNALS.preloadjs);
@@ -147,17 +191,18 @@ export default function StoryPlayerPage() {
         await ensureScript("toolbox", EXTERNALS.toolbox);
         if (cancelled) return;
 
-        // === Step 6: MediaWiki shims ===
+        // === Step 7: MediaWiki shims ===
         setupMwShims();
 
-        // === Step 7: Execute engine scripts ===
+        // === Step 8: Execute engine scripts ===
+        // Rewrite CDN URLs in engine script code too
         for (const scriptCode of bundle.engine_scripts) {
           if (cancelled) return;
-          const el = executeScript(scriptCode);
+          const el = executeScript(rewriteAllCdnUrls(scriptCode));
           addedElements.push(el);
         }
 
-        // === Step 8: Process RLQ ===
+        // === Step 9: Process RLQ ===
         processRLQ();
 
         setLoading(false);
@@ -171,17 +216,12 @@ export default function StoryPlayerPage() {
 
     return () => {
       cancelled = true;
-      // Stop audio
       document.querySelectorAll("#sys_audio audio").forEach((el) => {
         (el as HTMLAudioElement).pause();
       });
-      // Clear timers from the engine
       cleanupEngineTimers();
-      // Remove elements we added
       addedElements.forEach((el) => el.remove());
-      // Clear container
       container.innerHTML = "";
-      // Clean globals
       cleanupGlobals();
     };
   }, [decodedTitle]);
@@ -240,10 +280,85 @@ export default function StoryPlayerPage() {
   );
 }
 
-/** Download font if not cached, return local asset URL. Falls back to remote URL. */
+// ─── Helper Functions ───────────────────────────────────────────────────────
+
+/**
+ * Inject a JS shim that overrides Image.src, Audio.src, Source.src,
+ * and Element.setAttribute to rewrite wiki CDN URLs to proxy URLs.
+ * This catches dynamically created elements by the engine at runtime.
+ */
+function injectUrlRewriteShim(): HTMLScriptElement {
+  const shimCode = `
+(function() {
+  var PROXY_BASE = ${JSON.stringify(PROXY_BASE)};
+  var CDN_DOMAINS = ${JSON.stringify(WIKI_CDN_DOMAINS)};
+
+  function rewriteUrl(url) {
+    if (typeof url !== 'string') return url;
+    for (var i = 0; i < CDN_DOMAINS.length; i++) {
+      var d = CDN_DOMAINS[i];
+      var https = 'https://' + d + '/';
+      var http = 'http://' + d + '/';
+      if (url.indexOf(https) === 0) return PROXY_BASE + '/' + d + '/' + url.substring(https.length);
+      if (url.indexOf(http) === 0) return PROXY_BASE + '/' + d + '/' + url.substring(http.length);
+    }
+    return url;
+  }
+
+  // Override HTMLImageElement.src
+  var imgDesc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+  if (imgDesc && imgDesc.set) {
+    Object.defineProperty(HTMLImageElement.prototype, 'src', {
+      get: function() { return imgDesc.get.call(this); },
+      set: function(v) { imgDesc.set.call(this, rewriteUrl(v)); },
+      configurable: true, enumerable: true
+    });
+  }
+
+  // Override HTMLAudioElement.src
+  var audioDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+  if (audioDesc && audioDesc.set) {
+    Object.defineProperty(HTMLMediaElement.prototype, 'src', {
+      get: function() { return audioDesc.get.call(this); },
+      set: function(v) { audioDesc.set.call(this, rewriteUrl(v)); },
+      configurable: true, enumerable: true
+    });
+  }
+
+  // Override HTMLSourceElement.src
+  var srcDesc = Object.getOwnPropertyDescriptor(HTMLSourceElement.prototype, 'src');
+  if (srcDesc && srcDesc.set) {
+    Object.defineProperty(HTMLSourceElement.prototype, 'src', {
+      get: function() { return srcDesc.get.call(this); },
+      set: function(v) { srcDesc.set.call(this, rewriteUrl(v)); },
+      configurable: true, enumerable: true
+    });
+  }
+
+  // Override Element.setAttribute for 'src' and 'href'
+  var origSetAttr = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function(name, value) {
+    if ((name === 'src' || name === 'href') && typeof value === 'string') {
+      value = rewriteUrl(value);
+    }
+    return origSetAttr.call(this, name, value);
+  };
+
+  // Expose for debugging
+  window.__prtsRewriteUrl = rewriteUrl;
+  window.__prtsProxyBase = PROXY_BASE;
+})();
+`;
+  const script = document.createElement("script");
+  script.textContent = shimCode;
+  script.setAttribute("data-prts-shim", "1");
+  document.head.appendChild(script);
+  return script;
+}
+
+/** Download font if not cached, return local asset URL or proxy URL. */
 async function ensureFontCached(): Promise<string> {
   try {
-    // Check if already cached
     const existing = await invoke<string | null>("get_asset_path", {
       category: "engine",
       filename: EXTERNALS.font.filename,
@@ -251,7 +366,6 @@ async function ensureFontCached(): Promise<string> {
     if (existing) {
       return convertFileSrc(existing);
     }
-    // Download through Rust (bypasses CORS)
     const localPath = await invoke<string>("download_asset", {
       url: EXTERNALS.font.url,
       category: "engine",
@@ -259,28 +373,28 @@ async function ensureFontCached(): Promise<string> {
     });
     return convertFileSrc(localPath);
   } catch {
-    // Fall back to remote URL (may fail due to CORS, but worth trying)
-    return EXTERNALS.font.url;
+    // Fall back to proxied URL
+    return proxyUrl(EXTERNALS.font.url);
   }
 }
 
 /**
- * Load the scenario CSS. If cached locally, read as text, replace the remote font URL
- * with the local font URL, and inject as inline <style>. Otherwise load via <link>.
+ * Load CSS: prefer cached text (with font + CDN URLs patched),
+ * fall back to proxied remote URL.
  */
-async function loadCssWithLocalFont(localFontUrl: string): Promise<HTMLElement> {
-  // Try to read cached CSS text
+async function loadCssPatched(localFontUrl: string): Promise<HTMLElement> {
   try {
     const cssText = await invoke<string | null>("read_asset_text", {
       category: "engine",
       filename: EXTERNALS.css.filename,
     });
     if (cssText) {
-      // Replace remote font URL with local one
-      const patched = cssText.replace(
+      // Replace font URL and all CDN URLs
+      let patched = cssText.replace(
         /url\(['"]?https:\/\/static\.prts\.wiki\/assets\/scenario\/fonts\/NotoSans\.ttf['"]?\)/g,
         `url("${localFontUrl}")`
       );
+      patched = rewriteAllCdnUrls(patched);
       const style = document.createElement("style");
       style.setAttribute("data-prts-css", "1");
       style.textContent = patched;
@@ -288,20 +402,20 @@ async function loadCssWithLocalFont(localFontUrl: string): Promise<HTMLElement> 
       return style;
     }
   } catch {
-    // Fall through to <link> loading
+    // Fall through
   }
 
-  // Fallback: load via <link> (font inside CSS may still CORS-fail)
+  // Fallback: load via proxy URL
   const link = document.createElement("link");
   link.rel = "stylesheet";
   link.type = "text/css";
-  link.href = EXTERNALS.css.url;
+  link.href = proxyUrl(EXTERNALS.css.url);
   link.setAttribute("data-prts-css", "1");
   document.head.appendChild(link);
   return link;
 }
 
-/** Try to resolve an asset URL to a locally cached version, fall back to remote. */
+/** Try local cache first, fall back to proxy URL (not direct CDN). */
 async function resolveAssetUrl(ext: { url: string; filename: string }): Promise<string> {
   try {
     const localPath = await invoke<string | null>("get_asset_path", {
@@ -312,12 +426,13 @@ async function resolveAssetUrl(ext: { url: string; filename: string }): Promise<
       return convertFileSrc(localPath);
     }
   } catch {
-    // Fall through to remote
+    // Fall through
   }
-  return ext.url;
+  // Use proxy instead of direct CDN URL
+  return proxyUrl(ext.url);
 }
 
-/** Load a script if not already loaded (deduplication). Prefer local cache. */
+/** Load a script if not already loaded. Prefer local cache, fall back to proxy. */
 async function ensureScript(id: string, ext: { url: string; filename: string }): Promise<void> {
   if (loadedScripts.has(id)) return;
   const url = await resolveAssetUrl(ext);
@@ -330,26 +445,23 @@ async function ensureScript(id: string, ext: { url: string; filename: string }):
       resolve();
     };
     script.onerror = () => {
-      // If local failed, try remote
-      if (url !== ext.url) {
-        const fallback = document.createElement("script");
-        fallback.src = ext.url;
-        fallback.setAttribute("data-prts-script", id);
-        fallback.onload = () => {
-          loadedScripts.add(id);
-          resolve();
-        };
-        fallback.onerror = () => reject(new Error(`加载失败: ${ext.filename}`));
-        document.body.appendChild(fallback);
-      } else {
-        reject(new Error(`加载失败: ${ext.filename}`));
-      }
+      // If local/proxy failed, try proxy (if was local) or direct CDN as last resort
+      const fallbackUrl = url !== proxyUrl(ext.url) ? proxyUrl(ext.url) : ext.url;
+      const fallback = document.createElement("script");
+      fallback.src = fallbackUrl;
+      fallback.setAttribute("data-prts-script", id);
+      fallback.onload = () => {
+        loadedScripts.add(id);
+        resolve();
+      };
+      fallback.onerror = () => reject(new Error(`加载失败: ${ext.filename}`));
+      document.body.appendChild(fallback);
     };
     document.body.appendChild(script);
   });
 }
 
-/** Execute inline script code, returns the created element. */
+/** Execute inline script code. */
 function executeScript(code: string): HTMLScriptElement {
   const script = document.createElement("script");
   script.textContent = code;
@@ -393,7 +505,6 @@ function processRLQ() {
   }
 }
 
-/** Stop engine timers to prevent memory leaks. */
 function cleanupEngineTimers() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as any;
@@ -406,19 +517,19 @@ function cleanupEngineTimers() {
   }
 }
 
-/** Clean up global variables the engine creates. */
 function cleanupGlobals() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as any;
   const globals = [
     "system", "data", "timer", "AnaRes", "$enum", "ResType", "SetType", "LogType",
     "scenario", "pos_multiply", "public_disabled", "queue", "RLQ", "mw",
+    "__prtsRewriteUrl", "__prtsProxyBase",
   ];
   for (const g of globals) {
     try { delete w[g]; } catch { /* non-configurable */ }
   }
-  // Remove engine script tags
   document.querySelectorAll("[data-prts-engine]").forEach((el) => el.remove());
+  document.querySelectorAll("[data-prts-shim]").forEach((el) => el.remove());
 }
 
 function escapeHtml(str: string): string {

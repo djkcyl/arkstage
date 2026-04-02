@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' asset: http://asset.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://code.jquery.com https://static.prts.wiki asset: http://asset.localhost; style-src 'self' 'unsafe-inline' https://static.prts.wiki asset: http://asset.localhost; img-src 'self' https://media.prts.wiki https://static.prts.wiki asset: http://asset.localhost data:; media-src 'self' https://torappu.prts.wiki asset: http://asset.localhost; font-src 'self' https://static.prts.wiki asset: http://asset.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost",
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://code.jquery.com asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost; style-src 'self' 'unsafe-inline' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost; img-src 'self' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost data:; media-src 'self' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost; font-src 'self' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost prts-cdn: http://prts-cdn.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": {

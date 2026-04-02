@@ -3,10 +3,137 @@ mod models;
 mod parser;
 
 use commands::{assets, cache, wiki};
+use std::sync::OnceLock;
+
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            .build()
+            .unwrap()
+    })
+}
+
+/// Guess content-type from file extension.
+fn guess_content_type(path: &str) -> &'static str {
+    if path.ends_with(".png") {
+        "image/png"
+    } else if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if path.ends_with(".gif") {
+        "image/gif"
+    } else if path.ends_with(".webp") {
+        "image/webp"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else if path.ends_with(".mp3") {
+        "audio/mpeg"
+    } else if path.ends_with(".ogg") {
+        "audio/ogg"
+    } else if path.ends_with(".wav") {
+        "audio/wav"
+    } else if path.ends_with(".mp4") {
+        "video/mp4"
+    } else if path.ends_with(".css") {
+        "text/css"
+    } else if path.ends_with(".js") {
+        "application/javascript"
+    } else if path.ends_with(".json") {
+        "application/json"
+    } else if path.ends_with(".ttf") {
+        "font/ttf"
+    } else if path.ends_with(".woff") {
+        "font/woff"
+    } else if path.ends_with(".woff2") {
+        "font/woff2"
+    } else {
+        "application/octet-stream"
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("prts-cdn", |_app, request, responder| {
+            // URL format:
+            //   macOS/Linux: prts-cdn://localhost/{host}/{path}
+            //   Windows:     http://prts-cdn.localhost/{host}/{path}
+            // Extract path after host to build target URL.
+            let uri = request.uri().clone();
+            let path = uri.path().trim_start_matches('/');
+
+            if path.is_empty() {
+                let r = tauri::http::Response::builder()
+                    .status(400)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(b"Empty path".to_vec())
+                    .unwrap();
+                responder.respond(r);
+                return;
+            }
+
+            let query = uri.query().map(|q| format!("?{}", q)).unwrap_or_default();
+            let target_url = format!("https://{}{}", path, query);
+            let content_type = guess_content_type(path);
+
+            tauri::async_runtime::spawn(async move {
+                let client = http_client();
+                match client
+                    .get(&target_url)
+                    .header("Referer", "https://prts.wiki/")
+                    .send()
+                    .await
+                {
+                    Ok(resp) if resp.status().is_success() => {
+                        // Use upstream content-type if available, otherwise guess
+                        let ct = resp
+                            .headers()
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or(content_type)
+                            .to_string();
+
+                        match resp.bytes().await {
+                            Ok(bytes) => {
+                                let r = tauri::http::Response::builder()
+                                    .status(200)
+                                    .header("Content-Type", ct)
+                                    .header("Access-Control-Allow-Origin", "*")
+                                    .body(bytes.to_vec())
+                                    .unwrap();
+                                responder.respond(r);
+                            }
+                            Err(e) => {
+                                let r = tauri::http::Response::builder()
+                                    .status(502)
+                                    .header("Access-Control-Allow-Origin", "*")
+                                    .body(format!("Read error: {}", e).into_bytes())
+                                    .unwrap();
+                                responder.respond(r);
+                            }
+                        }
+                    }
+                    Ok(resp) => {
+                        let status = resp.status().as_u16();
+                        let r = tauri::http::Response::builder()
+                            .status(status)
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body(format!("Upstream returned {}", status).into_bytes())
+                            .unwrap();
+                        responder.respond(r);
+                    }
+                    Err(e) => {
+                        let r = tauri::http::Response::builder()
+                            .status(502)
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body(format!("Fetch error: {}", e).into_bytes())
+                            .unwrap();
+                        responder.respond(r);
+                    }
+                }
+            });
+        })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
