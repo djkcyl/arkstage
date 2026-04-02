@@ -42,6 +42,10 @@ const EXTERNALS = {
     url: "https://static.prts.wiki/assets/scenario/krliov.toolbox.js",
     filename: "krliov.toolbox.js",
   },
+  font: {
+    url: "https://static.prts.wiki/assets/scenario/fonts/NotoSans.ttf",
+    filename: "NotoSans.ttf",
+  },
 };
 
 // Track loaded scripts globally so we don't re-add them on React re-renders
@@ -126,7 +130,19 @@ export default function StoryPlayerPage() {
 
         container.innerHTML = headingHtml + bundle.dom_html + dataBlocksHtml;
 
-        // === Step 4: Load CSS ===
+        // === Step 4: Load font + CSS ===
+        // Download & inject font locally to avoid CORS issues
+        if (!document.querySelector(`style[data-prts-font]`)) {
+          const fontUrl = await ensureFontCached();
+          if (fontUrl) {
+            const fontStyle = document.createElement("style");
+            fontStyle.setAttribute("data-prts-font", "1");
+            fontStyle.textContent = `@font-face { font-family: NotoSans; src: url("${fontUrl}"); font-weight: normal; }`;
+            document.head.appendChild(fontStyle);
+            addedElements.push(fontStyle);
+          }
+        }
+
         if (!document.querySelector(`link[data-prts-css]`)) {
           const cssUrl = await resolveAssetUrl(EXTERNALS.css);
           const link = document.createElement("link");
@@ -237,6 +253,30 @@ export default function StoryPlayerPage() {
       />
     </div>
   );
+}
+
+/** Download font if not cached, return local asset URL. Falls back to remote URL. */
+async function ensureFontCached(): Promise<string> {
+  try {
+    // Check if already cached
+    const existing = await invoke<string | null>("get_asset_path", {
+      category: "engine",
+      filename: EXTERNALS.font.filename,
+    });
+    if (existing) {
+      return convertFileSrc(existing);
+    }
+    // Download through Rust (bypasses CORS)
+    const localPath = await invoke<string>("download_asset", {
+      url: EXTERNALS.font.url,
+      category: "engine",
+      filename: EXTERNALS.font.filename,
+    });
+    return convertFileSrc(localPath);
+  } catch {
+    // Fall back to remote URL (may fail due to CORS, but worth trying)
+    return EXTERNALS.font.url;
+  }
 }
 
 /** Try to resolve an asset URL to a locally cached version, fall back to remote. */

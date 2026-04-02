@@ -52,12 +52,13 @@ export default function SettingsPage() {
         data: JSON.stringify(bundle),
       });
 
-      // Cache external JS/CSS files via Rust
+      // Cache external JS/CSS/font files via Rust
       const externals = [
         { url: "https://code.jquery.com/jquery-3.7.1.min.js", category: "engine", filename: "jquery.min.js" },
         { url: "https://static.prts.wiki/npm/PreloadJS@1.0.1/preloadjs.min.js", category: "engine", filename: "preloadjs.min.js" },
         { url: "https://static.prts.wiki/assets/scenario/krliov.toolbox.js", category: "engine", filename: "krliov.toolbox.js" },
         { url: "https://static.prts.wiki/assets/scenario/arknights-scenario.css", category: "engine", filename: "arknights-scenario.css" },
+        { url: "https://static.prts.wiki/assets/scenario/fonts/NotoSans.ttf", category: "engine", filename: "NotoSans.ttf" },
       ];
       for (const ext of externals) {
         await invoke("download_asset", ext);

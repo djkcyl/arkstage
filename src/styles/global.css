@@ -1,8 +1,5 @@
-@font-face {
-  font-family: NotoSans;
-  src: url("https://static.prts.wiki/assets/scenario/fonts/NotoSans.ttf");
-  font-weight: normal;
-}
+/* NotoSans font is injected dynamically in StoryPlayerPage via locally cached file
+   to avoid CORS issues. Fallback to system fonts in font-family stack. */
 
 :root {
   --bg-primary: #1a1a1a;

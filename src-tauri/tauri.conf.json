@@ -22,7 +22,13 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' asset: https://asset.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://code.jquery.com https://static.prts.wiki asset: https://asset.localhost; style-src 'self' 'unsafe-inline' https://static.prts.wiki asset: https://asset.localhost; img-src 'self' https://media.prts.wiki https://static.prts.wiki asset: https://asset.localhost data:; media-src 'self' https://torappu.prts.wiki asset: https://asset.localhost; font-src 'self' https://static.prts.wiki asset: https://asset.localhost; connect-src 'self' ipc: http://ipc.localhost"
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' asset: http://asset.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://code.jquery.com https://static.prts.wiki asset: http://asset.localhost; style-src 'self' 'unsafe-inline' https://static.prts.wiki asset: http://asset.localhost; img-src 'self' https://media.prts.wiki https://static.prts.wiki asset: http://asset.localhost data:; media-src 'self' https://torappu.prts.wiki asset: http://asset.localhost; font-src 'self' https://static.prts.wiki asset: http://asset.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost",
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": ["$APPDATA/**"]
+        }
+      }
     }
   },
   "bundle": {
