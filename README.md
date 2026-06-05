@@ -1,73 +1,161 @@
-# React + TypeScript + Vite
+# PRTS 剧情阅读器
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+明日方舟（Arknights）剧情**离线**阅读器。它把 [PRTS Wiki](https://prts.wiki) 上的**原版剧情演出引擎**（ScenarioSimulator）搬进一个跨平台桌面应用里运行——带立绘、背景、配音与对话动画——并支持在不限量网络下**预下载**指定范围的资源，之后在无网或计费网络环境下**完全离线**播放。
 
-Currently, two official plugins are available:
+[![CI](https://github.com/djkcyl/prts-reader/actions/workflows/ci.yml/badge.svg)](https://github.com/djkcyl/prts-reader/actions/workflows/ci.yml)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+> 基于 **Tauri 2 + React 19 + TypeScript**。桌面端复用 Wiki 原生引擎，不自研渲染器，最大程度还原游戏内演出。
 
-## React Compiler
+---
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## ✨ 功能特性
 
-## Expanding the ESLint configuration
+- **原版演出还原**：直接运行 PRTS Wiki 的 ScenarioSimulator 引擎，背景 / 立绘 / 对话 / 配音与网页端一致。
+- **真离线**：预下载后可在断网环境完整播放，运行时资源一律走本地。
+- **按范围预下载**：可按单剧情 / 章节 / 分类批量下载，并通过引擎自身的资源清单精确获取所需文件。
+- **内容寻址去重**：相同资源（跨章节复用的立绘、音乐等）只下载与存储一份。
+- **联网策略开关**：允许联网时自动拉取并缓存缺失资源；禁止联网时仅播放已缓存内容。
+- **博士昵称**：替换剧情文本中的 `{@nickname}` 占位符。
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+---
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## 📦 安装与使用（普通用户）
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+### 1. 下载安装包
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+前往 [**Releases**](https://github.com/djkcyl/prts-reader/releases) 下载对应平台的安装包：
+
+| 平台 | 文件 |
+|------|------|
+| Windows | `.msi` 或 `*-setup.exe` |
+| macOS | `.dmg`（区分 Apple Silicon / Intel） |
+| Linux | `.AppImage` / `.deb` / `.rpm` |
+
+> 想要尝鲜可在 [Actions](https://github.com/djkcyl/prts-reader/actions) 的 CI 运行记录里下载每次提交自动构建的「CI 版」产物。
+
+### 2. 首次使用
+
+1. 打开应用 → **设置**：
+   - 点击 **「预缓存引擎」** 下载播放器所需的引擎代码与样式（需联网，仅需一次）。
+   - 点击 **「预缓存目录」** 下载剧情列表。
+2. 回到首页 → **浏览剧情**，挑选想看的剧情。
+3. 想离线观看时，先在不限量网络下预下载资源：
+   - 在播放器里点 **「预下载本剧情资源」**，或
+   - 在浏览页对某个**章节 / 分类**点 **「⬇ 预下载」** 批量获取。
+4. 之后即可在 **设置 → 联网：关** 的离线状态下流畅播放已缓存的剧情。
+
+### 3. 联网策略
+
+- **联网：开**（默认）——缺失资源会自动从 PRTS 拉取并缓存，适合 PC / 常驻不限量网络。
+- **联网：关**——只播放已缓存资源；遇到未缓存内容会提示你开启联网或先行预下载。
+
+---
+
+## 🧩 工作原理（简述）
+
+```
+prts.wiki ──HTTP──▶ Rust 后端 ──invoke──▶ React 前端 ──注入 iframe──▶ 原版引擎运行
+                       │                                                  │
+                  本地缓存 (APPDATA)                 运行时 CDN 资源经 prts-cdn:// 协议「先本地后网络」
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+- **Rust 后端**抓取并解析剧情目录与剧本，管理缓存，并提供自定义 `prts-cdn://` 协议：命中本地的内容寻址仓库（`$APPDATA/media/{host}/{path}`）即离线返回，未命中时（且允许联网）带正确 Referer 拉取并落盘。
+- **前端**在隔离的 `<iframe>` realm 中启动原版引擎（每个剧情独立 realm，避免引擎顶层 `const` 冲突），并复用引擎自身的 `fun_sys_preload()` 精确枚举某剧情所需资源用于预下载。
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+更详细的设计见 [`docs/superpowers/specs`](docs/superpowers/specs) 与 [`docs/superpowers/plans`](docs/superpowers/plans)。
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+---
+
+## 🛠️ 开发与构建（开发者）
+
+### 环境要求
+
+- **Node.js** ≥ 18（推荐 20+）
+- **Rust** 稳定版工具链（通过 [rustup](https://rustup.rs) 安装）
+- 各平台的 Tauri 2 系统依赖（见下）
+
+### 平台系统依赖
+
+**Linux（Debian / Ubuntu）**
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  libwebkit2gtk-4.1-dev build-essential curl wget file \
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 ```
+
+**Windows**：安装 [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) 与 WebView2 运行时（Win10/11 一般已自带）。
+
+**macOS**：安装 Xcode Command Line Tools（`xcode-select --install`）。
+
+> 其他发行版与详细说明参见 [Tauri 官方先决条件](https://v2.tauri.app/start/prerequisites/)。
+
+### 常用命令
+
+```bash
+npm install            # 安装前端依赖
+
+npm run tauri:dev      # 启动桌面应用（前端热重载 + Rust）
+npm run tauri:build    # 构建当前平台的安装包到 src-tauri/target/release/bundle/
+
+npm run dev            # 仅启动前端（Vite，浏览器调试用，引擎相关功能需在 Tauri 内运行）
+npm run build          # 仅构建前端（tsc + vite）
+npm run lint           # ESLint
+```
+
+### 项目结构
+
+```
+prts-reader/
+├─ src/                      # React 前端
+│  ├─ pages/                 # 首页 / 浏览 / 播放器 / 设置
+│  ├─ lib/                   # engineBoot(引擎启动) · predownload(清单+预下载) · proxy(CDN 改写)
+│  └─ hooks/
+├─ src-tauri/                # Tauri / Rust 后端
+│  └─ src/
+│     ├─ commands/           # wiki(抓取) · cache(缓存) · assets(下载)
+│     ├─ parser/             # 剧情目录 / 剧情页解析
+│     ├─ media.rs            # 内容寻址媒体仓库
+│     ├─ net_state.rs        # 联网开关
+│     └─ lib.rs              # prts-cdn:// 协议 + 命令注册
+├─ scripts/                  # 测试脚本（见下）
+└─ .github/workflows/        # CI 与 Release 工作流
+```
+
+### 测试
+
+```bash
+scripts/test-static.sh   # 离线：cargo test + cargo build + tsc + vite build
+scripts/test-e2e.sh      # 无头端到端冒烟：Xvfb 启动真实应用，xdotool 驱动并断言副作用
+scripts/run-tests.sh     # 以上全部
+```
+
+`test-e2e.sh` 需要 `Xvfb`、`xdotool`、ImageMagick，且需联网（prts.wiki）；它会临时清空本地缓存以保证结果确定。详见 [`scripts/README.md`](scripts/README.md)。
+
+> ⚠️ 已知限制：Linux 的 WebKitGTK 可能缺少 mp3/ogg 编解码器导致**音频不出声**，画面正常；Windows / macOS 自带编解码器无此问题。
+
+### CI / Release
+
+- **CI**（`.github/workflows/ci.yml`）：每次 push / PR 运行静态检查；push 时额外为三大平台构建安装包并作为 Workflow 产物上传（即「CI 版」）。
+- **Release**（`.github/workflows/release.yml`）：推送 `v*` 版本标签时，为 Windows / macOS(Intel + Apple Silicon) / Linux 构建并将安装包发布到对应 GitHub Release 的 Assets。标签含连字符（如 `v1.0.0-beta.1`）会发布为 **pre-release**。
+
+发布示例：
+
+```bash
+# 正式版
+git tag v1.0.0 && git push origin v1.0.0
+# 预发布版
+git tag v1.0.0-beta.1 && git push origin v1.0.0-beta.1
+```
+
+---
+
+## 📄 数据来源与免责声明
+
+- 剧情文本与素材来自 [PRTS Wiki](https://prts.wiki)，最终版权归 **《明日方舟》/ 鹰角网络（Hypergryph）** 所有。
+- 本项目为非官方的同人 / 学习性质阅读器，请合理使用、避免对源站造成压力，勿用于任何商业用途。
+
+## 📜 许可证
+
+本仓库尚未指定开源许可证。在补充 `LICENSE` 之前，默认保留所有权利。
