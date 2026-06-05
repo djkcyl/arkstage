@@ -118,7 +118,19 @@ cargo build --manifest-path src-tauri/Cargo.toml   # 仅编译后端（debug）
 按从快到慢、从本地到云端的顺序：
 
 1. **静态检查（最快，离线）**：`scripts/test-static.sh` —— 等价于 CI 的 `check` 任务（cargo test + cargo build + tsc + vite build）。
-2. **本地完整打包**：`npm run tauri:build` —— 复现 CI `build` 任务，在 `src-tauri/target/release/bundle/` 下生成当前平台安装包。只想快速验证某一种格式可加 `-- --bundles deb`（Linux）/ `msi`（Windows）/ `dmg`（macOS）跳过其余打包器。
+2. **本地完整打包**：`npm run tauri:build` —— 复现 CI `build` 任务，在 `src-tauri/target/release/bundle/` 下生成**当前操作系统**的安装包。
+
+   只想快速验证某一种格式，可指定打包器（注意：`--` 不能省，否则 npm 会把参数吞掉；且只能构建当前系统支持的格式）：
+
+   ```bash
+   # Linux（本机）：deb / rpm / appimage
+   npm run tauri:build -- --bundles deb
+
+   # Windows 上：msi / nsis        macOS 上：dmg / app
+   # npm run tauri:build -- --bundles msi
+   ```
+
+   > ⚠️ 安装包是**平台专属**的：`msi`/`nsis` 只能在 Windows 构建，`dmg`/`app` 只能在 macOS 构建，Linux 只能出 `deb`/`rpm`/`appimage`。跨平台安装包统一由 Release 工作流在各自的 runner 上产出。
 3. **本地跑 Actions（可选）**：用 [`act`](https://github.com/nektos/act) 在本地执行工作流，例如 `act push -j check`。
 4. **云端真跑**：推送到分支会触发 `check`；在 GitHub **Actions → CI → Run workflow** 可手动构建任意分支的安装包；验证发布流程可推一个测试标签：
 
