@@ -1,3 +1,5 @@
+import { usesHttpLocalhostScheme } from "./platform";
+
 // Wiki CDN domains that must be proxied through the prts-cdn:// protocol.
 export const WIKI_CDN_DOMAINS = [
   "static.prts.wiki",
@@ -5,8 +7,9 @@ export const WIKI_CDN_DOMAINS = [
   "torappu.prts.wiki",
 ];
 
-// On Windows WebView2 the custom scheme is served at http://{scheme}.localhost.
-export const PROXY_BASE = navigator.userAgent.includes("Windows")
+// Chromium-based WebViews (Windows WebView2, Android system WebView) serve the
+// custom scheme at http://{scheme}.localhost; WebKitGTK/WKWebView use {scheme}://.
+export const PROXY_BASE = usesHttpLocalhostScheme()
   ? "http://prts-cdn.localhost"
   : "prts-cdn://localhost";
 
