@@ -157,6 +157,7 @@ pub fn run() {
             });
         })
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_os::init())
         .setup(|app| {
             if let Ok(dir) = app.path().app_data_dir() {
                 data_root::init(dir);

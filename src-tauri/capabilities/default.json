@@ -10,6 +10,7 @@
     "core:app:default",
     "core:path:default",
     "core:image:default",
-    "dialog:default"
+    "dialog:default",
+    "os:default"
   ]
 }
