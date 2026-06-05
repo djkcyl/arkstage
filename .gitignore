@@ -30,6 +30,8 @@ src-tauri/gen/apple/
 /*.AppImage
 /*.dmg
 /*.zip
+/*.apk
+/*.aab
 
 # Portable build output (scripts/build-windows-portable.sh)
 /prts-reader-portable/
