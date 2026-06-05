@@ -26,7 +26,11 @@
       "assetProtocol": {
         "enable": true,
         "scope": {
-          "allow": ["$APPDATA/**"]
+          "allow": [
+            "$APPDATA/**",
+            "$APPDATA/../**",
+            "**/Android/data/com.prts.reader/files/**"
+          ]
         }
       }
     }
