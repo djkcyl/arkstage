@@ -5,6 +5,7 @@
 | `test-static.sh` | `cargo test` + `cargo build` + `tsc -b` + `vite build` | no | no |
 | `test-e2e.sh` | launches the real app under headless **Xvfb**, drives the UI with **xdotool**, asserts on real side-effects | **yes** (prts.wiki) | Xvfb |
 | `run-tests.sh` | runs static then e2e | yes | Xvfb |
+| `build-windows.sh` | cross-build a Windows **NSIS** installer (`*-setup.exe`) from Linux via MinGW | yes (first run) | no |
 
 ```bash
 scripts/test-static.sh     # fast, offline

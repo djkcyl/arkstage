@@ -130,13 +130,36 @@ cargo build --manifest-path src-tauri/Cargo.toml   # 仅编译后端（debug）
    # npm run tauri:build -- --bundles msi
    ```
 
-   > ⚠️ 安装包是**平台专属**的：`msi`/`nsis` 只能在 Windows 构建，`dmg`/`app` 只能在 macOS 构建，Linux 只能出 `deb`/`rpm`/`appimage`。跨平台安装包统一由 Release 工作流在各自的 runner 上产出。
+   > ⚠️ `--bundles` 按**宿主系统**校验，所以本地 `tauri build` 默认只出当前系统的格式（Linux=deb/rpm/appimage，Windows=msi/nsis，macOS=dmg/app）。跨平台安装包一般交给 Release 工作流在各自 runner 上产出；如需在 Linux 上交叉出 Windows 包，见下。
 3. **本地跑 Actions（可选）**：用 [`act`](https://github.com/nektos/act) 在本地执行工作流，例如 `act push -j check`。
 4. **云端真跑**：推送到分支会触发 `check`；在 GitHub **Actions → CI → Run workflow** 可手动构建任意分支的安装包；验证发布流程可推一个测试标签：
 
    ```bash
    git tag v0.0.1-test && git push origin v0.0.1-test   # 含连字符 → pre-release，可随后删除
    ```
+
+### 在 Linux 上交叉构建 Windows 包（实验性）
+
+可以在 Linux 上直接产出 Windows 的 **NSIS 安装包（`*-setup.exe`）**，已实测可用：
+
+```bash
+scripts/build-windows.sh
+# 等价于：
+#   sudo apt-get install -y mingw-w64 nsis
+#   rustup target add x86_64-pc-windows-gnu
+#   npm run tauri:build -- --target x86_64-pc-windows-gnu   # 注意：不要带 --bundles
+```
+
+产物：`src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/prts-reader_<版本>_x64-setup.exe`。
+
+要点与限制：
+
+- **不要带 `--bundles`**：该参数按宿主系统校验会报错；省略后 Tauri 依据 `tauri.conf.json` 的 `bundle.targets` 并按**目标平台**选打包器。
+- **MSI 无法在 Linux 构建**（需 Windows 的 WiX），Tauri 会打印 `ignoring msi` 并跳过，只产出 NSIS。
+- 该二进制是 **GNU ABI**（非 GitHub `windows-latest` 的 MSVC ABI）；能在 Windows 运行，但要最「官方」的产物仍建议用 Release 工作流，或改用 [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin) 走 `--target x86_64-pc-windows-msvc`。
+- Tauri 将交叉编译标记为**实验性**，安装包**未签名**；首次构建会从 GitHub 下载 `nsis_tauri_utils.dll`（需联网）。
+
+> 想本地出 `.msi` 或 macOS 的 `.dmg`，仍需对应系统（或在 Linux 上跑 Windows/macOS 虚拟机）。`act` 只能在本地跑 Actions 的 **Linux** 任务，无法替代 Windows/macOS runner——最省事的跨平台出包方式仍是已配置好的 GitHub Actions。
 
 ### 项目结构
 
