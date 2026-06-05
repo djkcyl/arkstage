@@ -23,9 +23,21 @@ src-tauri/gen/
 /*.rpm
 /*.AppImage
 /*.dmg
+/*.zip
+
+# Portable build output (scripts/build-windows-portable.sh)
+/prts-reader-portable/
+prts-reader-portable.zip
 
 # Reference files (downloaded for analysis)
 _reference/
+
+# Scratch artifacts dropped at the repo root while debugging (screenshots, logs).
+# scripts/precommit-clean.sh also removes these before a commit.
+/error.txt
+/image.png
+/image*.png
+/screenshot*.png
 
 # Editor directories and files
 .vscode/*
