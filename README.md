@@ -150,7 +150,7 @@ scripts/build-windows.sh
 #   npm run tauri:build -- --target x86_64-pc-windows-gnu   # 注意：不要带 --bundles
 ```
 
-产物：`src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/prts-reader_<版本>_x64-setup.exe`。
+脚本会把成品安装包 `prts-reader_<版本>_x64-setup.exe` **直接放到项目根目录**，并在构建后清除庞大的交叉编译中间产物（想保留以加速重复构建可设 `KEEP_TARGET=1`）。根目录下的安装包已在 `.gitignore` 中忽略。
 
 要点与限制：
 

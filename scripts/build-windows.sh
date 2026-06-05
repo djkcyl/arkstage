@@ -12,7 +12,11 @@
 #   - Tauri marks cross-compilation as experimental; the installer is unsigned.
 #   - First run downloads nsis_tauri_utils.dll from GitHub (needs network).
 #
-# Usage: scripts/build-windows.sh
+# The finished installer is copied into the PROJECT ROOT, and the (large)
+# intermediate cross-compile target dir is removed afterwards. Set KEEP_TARGET=1
+# to keep it for faster rebuilds.
+#
+# Usage: scripts/build-windows.sh   [KEEP_TARGET=1 scripts/build-windows.sh]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -41,7 +45,25 @@ rustup target add x86_64-pc-windows-gnu
 echo "==> Building (no --bundles: tauri picks the target's bundlers; MSI is skipped on Linux)"
 npm run tauri:build -- --target x86_64-pc-windows-gnu
 
-OUT_DIR="src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis"
+TRIPLE_DIR="src-tauri/target/x86_64-pc-windows-gnu"
+installer="$(ls -1 "$TRIPLE_DIR/release/bundle/nsis/"*-setup.exe 2>/dev/null | head -1 || true)"
+if [ -z "$installer" ]; then
+  echo "ERROR: no NSIS installer was produced under $TRIPLE_DIR/release/bundle/nsis" >&2
+  exit 1
+fi
+
+# Put the finished installer directly in the project root.
+dest="./$(basename "$installer")"
+cp -f "$installer" "$dest"
+
+# Remove the heavy intermediate cross-compile target dir (KEEP_TARGET=1 to keep it).
+if [ "${KEEP_TARGET:-0}" = "1" ]; then
+  echo "==> KEEP_TARGET=1 set; keeping $TRIPLE_DIR"
+else
+  echo "==> Cleaning intermediate build products ($TRIPLE_DIR)"
+  rm -rf "$TRIPLE_DIR"
+fi
+
 echo
-echo "==> Done. Installer(s):"
-ls -lh "$OUT_DIR"/*-setup.exe 2>/dev/null || { echo "No installer found in $OUT_DIR" >&2; exit 1; }
+echo "==> Done. Installer is in the project root:"
+ls -lh "$dest"

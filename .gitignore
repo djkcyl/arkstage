@@ -16,6 +16,14 @@ dist-ssr
 src-tauri/target/
 src-tauri/gen/
 
+# Local build outputs (installers copied to the project root by scripts/build-*.sh)
+/*.exe
+/*.msi
+/*.deb
+/*.rpm
+/*.AppImage
+/*.dmg
+
 # Reference files (downloaded for analysis)
 _reference/
 
