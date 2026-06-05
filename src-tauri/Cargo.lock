@@ -80,7 +80,9 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "html-escape",
+ "jni",
  "log",
+ "ndk-context",
  "reqwest 0.12.28",
  "scraper",
  "serde",

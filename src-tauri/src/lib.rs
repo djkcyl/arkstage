@@ -159,8 +159,28 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .setup(|app| {
-            if let Ok(dir) = app.path().app_data_dir() {
-                data_root::init(dir);
+            #[cfg(target_os = "android")]
+            {
+                // App-private external storage (spec §2). Fall back to internal
+                // app-data if external is somehow unavailable so the app still runs.
+                match data_root::android_external_files_dir() {
+                    Ok(dir) => {
+                        log::info!("[data_root] android external files dir: {}", dir.display());
+                        data_root::init_fixed(dir);
+                    }
+                    Err(e) => {
+                        log::warn!("[data_root] external dir unavailable ({e}); using internal app_data");
+                        if let Ok(dir) = app.path().app_data_dir() {
+                            data_root::init_fixed(dir);
+                        }
+                    }
+                }
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                if let Ok(dir) = app.path().app_data_dir() {
+                    data_root::init(dir);
+                }
             }
             if cfg!(debug_assertions) {
                 app.handle().plugin(

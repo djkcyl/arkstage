@@ -21,6 +21,7 @@ static EXE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 static DATA_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
 
 /// Called once at startup with the OS app-data dir.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn init(app_data: PathBuf) {
     let _ = APP_DATA_DIR.set(app_data);
     let _ = EXE_DIR.set(
@@ -46,15 +47,18 @@ fn app_data_dir() -> PathBuf {
     APP_DATA_DIR.get().cloned().unwrap_or_else(std::env::temp_dir)
 }
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn exe_dir() -> Option<PathBuf> {
     EXE_DIR.get().cloned().flatten()
 }
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn config_path() -> PathBuf {
     app_data_dir().join("config.json")
 }
 
 /// Can we create `dir` and write a file in it?
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn is_writable(dir: &Path) -> bool {
     if std::fs::create_dir_all(dir).is_err() {
         return false;
@@ -70,6 +74,7 @@ fn is_writable(dir: &Path) -> bool {
 }
 
 /// Read the persisted override path (None if unset/empty).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn read_override() -> Option<PathBuf> {
     let txt = std::fs::read_to_string(config_path()).ok()?;
     let v: serde_json::Value = serde_json::from_str(&txt).ok()?;
@@ -81,6 +86,7 @@ fn read_override() -> Option<PathBuf> {
 }
 
 /// Persist (or clear, with None) the override path in config.json.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn write_override(dir: Option<&Path>) -> Result<(), String> {
     let path = config_path();
     if let Some(parent) = path.parent() {
@@ -95,6 +101,7 @@ fn write_override(dir: Option<&Path>) -> Result<(), String> {
 }
 
 /// Resolve the data root per the documented priority.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn resolve() -> PathBuf {
     if let Some(env) = std::env::var_os("PRTS_DATA_DIR") {
         let p = PathBuf::from(env);
@@ -130,6 +137,7 @@ pub struct ResourceDirInfo {
     pub default_writable: bool,
 }
 
+#[cfg(not(target_os = "android"))]
 fn info() -> ResourceDirInfo {
     let default_dir = exe_dir().unwrap_or_else(app_data_dir);
     ResourceDirInfo {
@@ -141,6 +149,20 @@ fn info() -> ResourceDirInfo {
     }
 }
 
+// Android: storage is fixed to the app-private external files dir. The directory
+// picker is removed from the UI; report a non-custom, fixed location.
+#[cfg(target_os = "android")]
+fn info() -> ResourceDirInfo {
+    let cur = data_root().to_string_lossy().into_owned();
+    ResourceDirInfo {
+        current: cur.clone(),
+        is_custom: false,
+        default_dir: cur.clone(),
+        fallback_dir: cur,
+        default_writable: true,
+    }
+}
+
 #[tauri::command]
 pub fn get_resource_dir() -> ResourceDirInfo {
     info()
@@ -148,6 +170,7 @@ pub fn get_resource_dir() -> ResourceDirInfo {
 
 /// Set a custom data root. Validates writability, persists it, and switches live.
 /// Existing data is NOT moved — new downloads/cache go to the new location.
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub fn set_resource_dir(path: String) -> Result<ResourceDirInfo, String> {
     let p = PathBuf::from(path.trim());
@@ -163,11 +186,75 @@ pub fn set_resource_dir(path: String) -> Result<ResourceDirInfo, String> {
 }
 
 /// Clear the override and fall back to the default resolution (exe folder / app-data).
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub fn reset_resource_dir() -> Result<ResourceDirInfo, String> {
     write_override(None)?;
     *DATA_ROOT.write().unwrap() = Some(resolve());
     Ok(info())
+}
+
+// Android: storage location is fixed. Keep the command signatures so the frontend
+// contract is unchanged, but they are no-ops that just echo the fixed info.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn set_resource_dir(_path: String) -> Result<ResourceDirInfo, String> {
+    Ok(info())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn reset_resource_dir() -> Result<ResourceDirInfo, String> {
+    Ok(info())
+}
+
+/// Android: the app-private external files dir
+/// (`/storage/emulated/0/Android/data/com.prts.reader/files`). No runtime
+/// permission needed; visible to file managers; large quota; cleared on uninstall.
+/// Obtained via JNI `Context.getExternalFilesDir(null)` because Tauri's path
+/// resolver maps `app_data_dir()` to *internal* storage on Android.
+#[cfg(target_os = "android")]
+pub fn android_external_files_dir() -> Result<PathBuf, String> {
+    use jni::objects::JObject;
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| e.to_string())?;
+    let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+    // File dir = context.getExternalFilesDir(null)
+    let null = JObject::null();
+    let file = env
+        .call_method(
+            &context,
+            "getExternalFilesDir",
+            "(Ljava/lang/String;)Ljava/io/File;",
+            &[(&null).into()],
+        )
+        .map_err(|e| e.to_string())?
+        .l()
+        .map_err(|e| e.to_string())?;
+    if file.is_null() {
+        return Err("getExternalFilesDir returned null (external storage unavailable)".into());
+    }
+    // path = file.getAbsolutePath()
+    let path = env
+        .call_method(&file, "getAbsolutePath", "()Ljava/lang/String;", &[])
+        .map_err(|e| e.to_string())?
+        .l()
+        .map_err(|e| e.to_string())?;
+    let s: String = env
+        .get_string(&jni::objects::JString::from(path))
+        .map_err(|e| e.to_string())?
+        .into();
+    Ok(PathBuf::from(s))
+}
+
+/// Android: pin the data root to a fixed directory (the external files dir).
+/// No env override, no config.json, no exe-folder logic — storage is not
+/// user-configurable on Android.
+#[cfg(target_os = "android")]
+pub fn init_fixed(dir: PathBuf) {
+    let _ = APP_DATA_DIR.set(dir.clone());
+    *DATA_ROOT.write().unwrap() = Some(dir);
 }
 
 #[cfg(test)]
