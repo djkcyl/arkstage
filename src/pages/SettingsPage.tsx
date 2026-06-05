@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { isDebugConsoleEnabled, setDebugPref, debugBuildDefault } from "../lib/debugSettings";
+import { isAndroid } from "../lib/platform";
 
 interface CacheStatus {
   story_index_cached: boolean;
@@ -21,6 +22,7 @@ interface ResourceDirInfo {
 
 export default function SettingsPage() {
   const navigate = useNavigate();
+  const hideResourceDir = isAndroid();
   const [nickname, setNickname] = useState("博士");
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
   const [message, setMessage] = useState("");
@@ -231,8 +233,9 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Resource directory */}
-      <div className="setting-group">
+      {/* Resource directory (desktop only — Android storage is fixed) */}
+      {!hideResourceDir && (
+        <div className="setting-group">
         <label>资源目录（剧情图片/音频、引擎文件、缓存的存放位置）</label>
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "8px" }}>
           <button className="btn-primary" onClick={chooseResourceDir}>更改目录…</button>
@@ -260,7 +263,8 @@ export default function SettingsPage() {
             <div>正在读取资源目录...</div>
           )}
         </div>
-      </div>
+        </div>
+      )}
 
       {/* Cache Management */}
       <div className="setting-group">
