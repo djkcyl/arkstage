@@ -96,13 +96,35 @@ sudo apt-get install -y \
 ```bash
 npm install            # 安装前端依赖
 
-npm run tauri:dev      # 启动桌面应用（前端热重载 + Rust）
-npm run tauri:build    # 构建当前平台的安装包到 src-tauri/target/release/bundle/
+# —— 全应用（前端 + Rust 后端一起）——
+npm run tauri:dev      # 启动桌面应用（前端热重载 + Rust 后端）
+npm run tauri:build    # 构建当前平台安装包到 src-tauri/target/release/bundle/
+                       # （内部会先 npm run build 打包前端，再编译 Rust 并打包）
 
-npm run dev            # 仅启动前端（Vite，浏览器调试用，引擎相关功能需在 Tauri 内运行）
+# —— 仅前端 ——
+npm run dev            # 仅启动前端（Vite，浏览器调试用；引擎相关功能需在 Tauri 内运行）
 npm run build          # 仅构建前端（tsc + vite）
 npm run lint           # ESLint
+
+# —— 仅后端（Rust / Tauri）——
+cargo test  --manifest-path src-tauri/Cargo.toml   # 后端单元测试
+cargo build --manifest-path src-tauri/Cargo.toml   # 仅编译后端（debug）
 ```
+
+> 说明：`npm run tauri:build` 是**完整构建**——它会先打包前端（`npm run build`），再编译 Rust 后端并生成安装包，无需单独构建后端。上面的 `cargo` 命令仅用于单独测试 / 编译后端。
+
+### 如何验证构建是否正确
+
+按从快到慢、从本地到云端的顺序：
+
+1. **静态检查（最快，离线）**：`scripts/test-static.sh` —— 等价于 CI 的 `check` 任务（cargo test + cargo build + tsc + vite build）。
+2. **本地完整打包**：`npm run tauri:build` —— 复现 CI `build` 任务，在 `src-tauri/target/release/bundle/` 下生成当前平台安装包。只想快速验证某一种格式可加 `-- --bundles deb`（Linux）/ `msi`（Windows）/ `dmg`（macOS）跳过其余打包器。
+3. **本地跑 Actions（可选）**：用 [`act`](https://github.com/nektos/act) 在本地执行工作流，例如 `act push -j check`。
+4. **云端真跑**：推送到分支会触发 `check`；在 GitHub **Actions → CI → Run workflow** 可手动构建任意分支的安装包；验证发布流程可推一个测试标签：
+
+   ```bash
+   git tag v0.0.1-test && git push origin v0.0.1-test   # 含连字符 → pre-release，可随后删除
+   ```
 
 ### 项目结构
 

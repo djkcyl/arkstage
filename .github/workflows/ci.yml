@@ -6,6 +6,7 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  workflow_dispatch: # manual run — pick any branch in the Actions UI to build it
 
 permissions:
   contents: read
@@ -47,7 +48,8 @@ jobs:
   build:
     name: Build (${{ matrix.platform }})
     needs: check
-    if: github.event_name == 'push'
+    # Auto-build only on master pushes; manual workflow_dispatch can build any branch.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     strategy:
       fail-fast: false
       matrix:
