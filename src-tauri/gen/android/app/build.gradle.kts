@@ -24,6 +24,22 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    signingConfigs {
+        create("release") {
+            // Wired-but-disabled release signing. Populated only when the
+            // ANDROID_KEYSTORE_* env vars are set (CI secrets / local release).
+            // With them unset, the release build falls back to the debug signing
+            // config (see buildTypes.release) — no real keystore is generated or
+            // committed. To enable: see docs/android-build.md.
+            val storeFilePath = System.getenv("ANDROID_KEYSTORE_PATH")
+            if (!storeFilePath.isNullOrEmpty()) {
+                storeFile = file(storeFilePath)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -38,6 +54,14 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = true
+            // Use the real release keystore when ANDROID_KEYSTORE_PATH is set,
+            // otherwise fall back to debug signing so an unsigned local release
+            // build still installs on a dev device.
+            signingConfig = if (System.getenv("ANDROID_KEYSTORE_PATH").isNullOrEmpty()) {
+                signingConfigs.getByName("debug")
+            } else {
+                signingConfigs.getByName("release")
+            }
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))
