@@ -62,6 +62,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Released builds ship with the debug console enabled by default
+          # (users can turn it off in Settings).
+          VITE_DEBUG_DEFAULT: "true"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "PRTS 剧情阅读器 ${{ github.ref_name }}"

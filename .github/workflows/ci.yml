@@ -78,6 +78,10 @@ jobs:
 
       - run: npm ci
       - name: Build the app (native target)
+        # CI/script builds ship with the on-screen debug console enabled by default
+        # (users can turn it off in Settings). Ordinary local builds default off.
+        env:
+          VITE_DEBUG_DEFAULT: "true"
         run: npm run tauri:build
 
       - name: Upload installers

@@ -1,12 +1,22 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { isDebugConsoleEnabled, setDebugPref, debugBuildDefault } from "../lib/debugSettings";
 
 interface CacheStatus {
   story_index_cached: boolean;
   asset_db_cached: boolean;
   cached_stories: string[];
   total_size_bytes: number;
+}
+
+interface ResourceDirInfo {
+  current: string;
+  is_custom: boolean;
+  default_dir: string;
+  fallback_dir: string;
+  default_writable: boolean;
 }
 
 export default function SettingsPage() {
@@ -16,13 +26,47 @@ export default function SettingsPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [allowOnline, setAllowOnline] = useState(true);
+  const [resDir, setResDir] = useState<ResourceDirInfo | null>(null);
+  const [debugConsole, setDebugConsole] = useState(isDebugConsoleEnabled());
 
   useEffect(() => {
     const saved = localStorage.getItem("prts-nickname");
     if (saved) setNickname(saved);
     refreshCacheStatus();
     invoke<boolean>("get_allow_online").then(setAllowOnline).catch(() => {});
+    invoke<ResourceDirInfo>("get_resource_dir").then(setResDir).catch(() => {});
   }, []);
+
+  const chooseResourceDir = async () => {
+    try {
+      const picked = await open({ directory: true, multiple: false, title: "选择资源目录" });
+      if (typeof picked !== "string") return; // cancelled
+      const info = await invoke<ResourceDirInfo>("set_resource_dir", { path: picked });
+      setResDir(info);
+      showMsg("资源目录已更改。已下载的旧资源不会自动迁移，建议重启应用。", 6000);
+      refreshCacheStatus();
+    } catch (e) {
+      showMsg(`更改失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
+    }
+  };
+
+  const resetResourceDir = async () => {
+    try {
+      const info = await invoke<ResourceDirInfo>("reset_resource_dir");
+      setResDir(info);
+      showMsg("已恢复默认资源目录，建议重启应用。", 5000);
+      refreshCacheStatus();
+    } catch (e) {
+      showMsg(`恢复失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
+    }
+  };
+
+  const toggleDebugConsole = () => {
+    const next = !debugConsole;
+    setDebugPref(next ? "on" : "off");
+    setDebugConsole(next);
+    showMsg(next ? "已开启调试控制台（左下角「调试日志」）" : "已关闭调试控制台");
+  };
 
   const toggleAllowOnline = async () => {
     const next = !allowOnline;
@@ -138,6 +182,7 @@ export default function SettingsPage() {
 
   return (
     <div className="settings-page">
+      <div className="settings-content">
       <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "24px" }}>
         <button className="nav-btn" onClick={() => navigate("/")}>◀</button>
         <h1 style={{ margin: 0 }}>设置</h1>
@@ -146,7 +191,7 @@ export default function SettingsPage() {
       {/* Nickname */}
       <div className="setting-group">
         <label>博士昵称（替换剧情中的 &#123;@nickname&#125;）</label>
-        <div style={{ display: "flex", gap: "8px" }}>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
           <input
             type="text"
             value={nickname}
@@ -160,13 +205,60 @@ export default function SettingsPage() {
       {/* Network policy */}
       <div className="setting-group">
         <label>联网策略</label>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
           <button className="nav-btn" onClick={toggleAllowOnline}>
             {allowOnline ? "联网：开" : "联网：关"}
           </button>
           <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
             {allowOnline ? "缺失资源将自动从 PRTS 拉取并缓存" : "仅播放已缓存资源，缺失时提示获取"}
           </span>
+        </div>
+      </div>
+
+      {/* Debug console */}
+      <div className="setting-group">
+        <label>调试控制台</label>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          <button className="nav-btn" onClick={toggleDebugConsole}>
+            {debugConsole ? "调试日志：开" : "调试日志：关"}
+          </button>
+          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+            {debugConsole
+              ? "左下角显示「调试日志」按钮，可查看引擎错误日志"
+              : "隐藏左下角的「调试日志」按钮"}
+            （构建默认：{debugBuildDefault() ? "开" : "关"}）
+          </span>
+        </div>
+      </div>
+
+      {/* Resource directory */}
+      <div className="setting-group">
+        <label>资源目录（剧情图片/音频、引擎文件、缓存的存放位置）</label>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "8px" }}>
+          <button className="btn-primary" onClick={chooseResourceDir}>更改目录…</button>
+          {resDir?.is_custom && (
+            <button className="nav-btn" onClick={resetResourceDir}>恢复默认</button>
+          )}
+        </div>
+        <div className="cache-info">
+          {resDir ? (
+            <>
+              <div style={{ wordBreak: "break-all" }}>
+                当前位置：{resDir.current}
+                {resDir.is_custom ? "（自定义）" : "（默认）"}
+              </div>
+              <div style={{ wordBreak: "break-all", color: "var(--text-secondary)" }}>
+                默认位置（exe 所在文件夹）：{resDir.default_dir}
+                {resDir.default_writable ? "" : " — 不可写，已回退"}
+              </div>
+              <div style={{ color: "var(--text-secondary)", marginTop: "4px" }}>
+                提示：更改目录不会自动迁移已下载的资源；切换后建议重启应用。
+                若安装在 Program Files 等无写入权限的位置，会自动回退到系统数据目录。
+              </div>
+            </>
+          ) : (
+            <div>正在读取资源目录...</div>
+          )}
         </div>
       </div>
 
@@ -224,6 +316,7 @@ export default function SettingsPage() {
           {message}
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -6,9 +6,9 @@
 #   - the app window actually appears                  (app boots)
 #   - visiting the browser writes story-index cache    (wiki index fetch + parse)
 #   - opening a story writes widget-bundle + script    (engine bundle + story fetch)
-#   - long-pressing fills the content-addressed store  (engine preload via prts-cdn://)
+#   - opening a story fills the content-addressed store (engine AUTO-preload via prts-cdn://)
 #   - a story scene renders (pixel variance in canvas) (engine actually draws)
-#   - predownloading a fresh story grows the store     (iframe manifest capture + batch dl)
+#   - opening a second story also grows the store      (fresh iframe realm, no dup-var)
 #
 # Requires network (prts.wiki) and: Xvfb, xdotool, ImageMagick (import/convert).
 # Usage: scripts/test-e2e.sh   (run from anywhere; needs the repo built)
@@ -33,9 +33,8 @@ WIN_W=1024; WIN_H=600
 # UI coordinates (window pinned at 0,0 with size ${WIN_W}x${WIN_H}, no WM).
 HOME_BROWSE_X=476;  HOME_BROWSE_Y=384      # "浏览剧情" button on Home
 STORY_A_X=235;      STORY_A_Y=295          # first story link ("0-1 坍塌 行动前")
-STORY_B_X=71;       STORY_B_Y=295          # a different story ("序章·上") for predownload
+STORY_B_X=71;       STORY_B_Y=295          # a different story ("序章·上"), opened to test a 2nd realm
 PLAY_CX=512;        PLAY_CY=300            # centre of the play area
-PREDL_X=950;        PREDL_Y=22             # "预下载本剧情资源" button (player, top-right)
 
 mkdir -p "$SHOTS"
 PASS=0; FAIL=0
@@ -83,8 +82,10 @@ sleep 2
 if DISPLAY=$DISP xdotool getdisplaygeometry >/dev/null 2>&1; then ok "Xvfb display $DISP is up"; else no "Xvfb display $DISP failed (see $XVFB_LOG)"; exit 2; fi
 
 # ---- 3. launch app ----------------------------------------------------------
-info "launching: DISPLAY=$DISP npm run tauri:dev (cold-ish, may take a minute)"
-( DISPLAY=$DISP npm run tauri:dev >"$APP_LOG" 2>&1 & )
+# Pin the data root to APPDATA so the assertions below (which check $APPDATA/media
+# etc.) stay valid. In a real release the default is the exe's own folder.
+info "launching: DISPLAY=$DISP PRTS_DATA_DIR=$APPDATA npm run tauri:dev (cold-ish, may take a minute)"
+( DISPLAY=$DISP PRTS_DATA_DIR="$APPDATA" npm run tauri:dev >"$APP_LOG" 2>&1 & )
 WID=""
 for _ in $(seq 1 120); do
   WID=$(DISPLAY=$DISP xdotool search --name "PRTS 剧情阅读器" 2>/dev/null | head -1)
@@ -113,26 +114,24 @@ sd=$(region_stddev "$SHOTS/02_browser.png")
 awk -v v="$sd" 'BEGIN{exit !(v+0>0.05)}' && ok "browser list rendered (stddev=$sd)" || no "browser list looks empty (stddev=$sd)"
 
 # ---- 5. open a story: engine bundle + script -------------------------------
+pre_media=$(count_media)   # baseline BEFORE opening (engine auto-preload starts on boot)
 cl "$STORY_A_X" "$STORY_A_Y" 2
 info "opened a story; waiting for engine bundle + story script to cache"
 wait_file "$CACHE/widget-bundle-v2.json" 40 && ok "engine widget bundle cached (widget-bundle-v2.json)" || no "engine bundle not cached"
+# The story script is saved asynchronously after the bundle, so poll for it.
+sd_deadline=$((SECONDS+30))
+while ! ls "$CACHE"/stories_*.json >/dev/null 2>&1 && [ $SECONDS -lt $sd_deadline ]; do sleep 1; done
 if ls "$CACHE"/stories_*.json >/dev/null 2>&1; then ok "story script cached (stories_*.json)"; else no "story script not cached"; fi
-sleep 4   # let engine finish booting (deps + scripts) before long-press
+sleep 4   # let engine finish booting (deps + scripts)
 shot 03_player_loaded
 
-# ---- 6. preload via prts-cdn:// (long-press) -------------------------------
-pre_media=$(count_media)
-info "engine loaded; media files before preload: $pre_media. Long-pressing to trigger preload."
-triggered=0
-for attempt in 1 2 3; do
-  DISPLAY=$DISP xdotool mousemove "$PLAY_CX" "$PLAY_CY" mousedown 1; sleep 1.4; DISPLAY=$DISP xdotool mouseup 1
-  wait_media $((pre_media+3)) 20
-  if [ "$(count_media)" -ge $((pre_media+3)) ]; then triggered=1; break; fi
-  info "preload not detected yet (attempt $attempt), retrying long-press"
-  sleep 3
-done
+# ---- 6. AUTO-preload via prts-cdn:// (no long-press gate) -------------------
+# The long-press "1s to start preload" gate was removed: preload now starts
+# automatically on boot, so the media store should fill without any interaction.
+info "engine loaded; media files before open: $pre_media. Waiting for auto-preload to fill the store."
+wait_media $((pre_media+3)) 40
 post_media=$(count_media)
-if [ "$triggered" = 1 ]; then ok "engine preloaded assets via prts-cdn:// (media $pre_media -> $post_media)"; else no "no assets fetched after preload (media stayed $post_media)"; fi
+if [ "$post_media" -ge $((pre_media+3)) ]; then ok "engine auto-preloaded assets via prts-cdn:// (media $pre_media -> $post_media)"; else no "no assets fetched after auto-preload (media stayed $post_media)"; fi
 
 # ---- 7. scene renders -------------------------------------------------------
 sleep 3
@@ -142,18 +141,24 @@ shot 04_scene
 sd=$(region_stddev "$SHOTS/04_scene.png")
 if awk -v v="$sd" 'BEGIN{exit !(v+0>0.04)}'; then ok "story scene rendered (canvas stddev=$sd)"; else no "story scene did not render (canvas stddev=$sd)"; fi
 
-# ---- 8. predownload a FRESH story (iframe manifest capture + batch dl) ------
+# ---- 8. open a SECOND story (fresh iframe realm boots + renders) ------------
+# Opening another story boots a second engine in a FRESH iframe realm. The real
+# regression risk is realm isolation: re-running the engine in a shared realm
+# throws "duplicate variable" and the scene never draws. (We don't assert media
+# growth here — the content-addressed store dedups, so a 2nd story that reuses
+# already-cached assets legitimately adds zero files.)
 cl 42 22 2                      # 返回 -> browser
-base_media=$(count_media)
 cl "$STORY_B_X" "$STORY_B_Y" 6  # open a different story
 shot 05_story_b_loaded
-cl "$PREDL_X" "$PREDL_Y" 1      # click 预下载本剧情资源
-info "predownloading a fresh story; media before: $base_media"
-wait_media $((base_media+3)) 45
-grow_media=$(count_media)
-if [ "$grow_media" -gt "$base_media" ]; then ok "predownload grew media store ($base_media -> $grow_media); iframe manifest capture works"; else no "predownload did not grow media store (stayed $base_media); manifest capture broken"; fi
+info "opened a second story; waiting for it to boot, then clicking to render a scene"
+sleep 4
+cl "$PLAY_CX" "$PLAY_CY" 2     # click to start playback
+cl "$PLAY_CX" "$PLAY_CY" 2     # advance a line
+shot 06_story_b_scene
+sd=$(region_stddev "$SHOTS/06_story_b_scene.png")
+if awk -v v="$sd" 'BEGIN{exit !(v+0>0.04)}'; then ok "second story rendered in a fresh realm (canvas stddev=$sd)"; else no "second story did not render (canvas stddev=$sd); realm boot broken"; fi
 # guard against the known 'duplicate variable' realm bug regressing
-if grep -q "duplicate variable" "$APP_LOG"; then no "engine threw 'duplicate variable' (manifest realm isolation regressed)"; else ok "no 'duplicate variable' engine error in log"; fi
+if grep -q "duplicate variable" "$APP_LOG"; then no "engine threw 'duplicate variable' (realm isolation regressed)"; else ok "no 'duplicate variable' engine error in log"; fi
 
 # ---- summary ----------------------------------------------------------------
 echo "=============================================================="

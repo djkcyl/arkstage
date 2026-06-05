@@ -129,6 +129,7 @@
   border-radius: 4px;
   color: var(--text-primary);
   font-size: 13px;
+  white-space: nowrap;
   transition: all 0.15s;
 }
 
@@ -159,17 +160,35 @@
 }
 
 /* Settings page */
+/* Full-width scroll container (scrollbar sits at the window edge) ... */
 .settings-page {
   padding: 24px;
-  max-width: 600px;
+  width: 100%;
   overflow-y: auto;
   height: 100%;
+}
+
+/* ... with a centered, width-capped content column so the page stays readable
+   on wide windows and uses the available space on narrow ones. */
+.settings-content {
+  max-width: 760px;
+  margin: 0 auto;
 }
 
 .settings-page h1 {
   font-size: 20px;
   color: var(--accent);
   margin-bottom: 24px;
+}
+
+/* Tighten spacing on small windows. */
+@media (max-width: 640px) {
+  .settings-page {
+    padding: 16px;
+  }
+  .setting-group {
+    margin-bottom: 18px;
+  }
 }
 
 .setting-group {
@@ -191,6 +210,8 @@
   color: var(--text-primary);
   font-size: 14px;
   width: 100%;
+  flex: 1;
+  min-width: 160px;
 }
 
 .cache-info {
@@ -206,6 +227,7 @@
   border-radius: 4px;
   font-size: 14px;
   font-weight: bold;
+  white-space: nowrap;
   transition: background 0.15s;
 }
 
@@ -219,6 +241,7 @@
   color: #fff;
   border-radius: 4px;
   font-size: 14px;
+  white-space: nowrap;
   transition: background 0.15s;
 }
 

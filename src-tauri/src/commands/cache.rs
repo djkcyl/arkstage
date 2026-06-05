@@ -1,15 +1,10 @@
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
 
 use crate::models::CacheStatus;
 
-/// Get the cache directory path.
-fn cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    let cache_dir = dir.join("cache");
+/// Get the cache directory path (under the configurable data root).
+fn cache_dir() -> Result<PathBuf, String> {
+    let cache_dir = crate::data_root::data_root().join("cache");
     std::fs::create_dir_all(&cache_dir)
         .map_err(|e| format!("Failed to create cache dir: {}", e))?;
     Ok(cache_dir)
@@ -20,9 +15,8 @@ fn cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
 pub async fn save_to_cache(
     key: String,
     data: String,
-    app: AppHandle,
 ) -> Result<(), String> {
-    let dir = cache_dir(&app)?;
+    let dir = cache_dir()?;
     // Sanitize key for filesystem
     let filename = sanitize_filename(&key);
     let path = dir.join(format!("{}.json", filename));
@@ -43,9 +37,8 @@ pub async fn save_to_cache(
 #[tauri::command]
 pub async fn load_from_cache(
     key: String,
-    app: AppHandle,
 ) -> Result<Option<String>, String> {
-    let dir = cache_dir(&app)?;
+    let dir = cache_dir()?;
     let filename = sanitize_filename(&key);
     let path = dir.join(format!("{}.json", filename));
 
@@ -62,9 +55,8 @@ pub async fn load_from_cache(
 #[tauri::command]
 pub async fn delete_from_cache(
     key: String,
-    app: AppHandle,
 ) -> Result<(), String> {
-    let dir = cache_dir(&app)?;
+    let dir = cache_dir()?;
     let filename = sanitize_filename(&key);
     let path = dir.join(format!("{}.json", filename));
 
@@ -77,8 +69,8 @@ pub async fn delete_from_cache(
 
 /// List all cached story script keys.
 #[tauri::command]
-pub async fn list_cached_stories(app: AppHandle) -> Result<Vec<String>, String> {
-    let dir = cache_dir(&app)?;
+pub async fn list_cached_stories() -> Result<Vec<String>, String> {
+    let dir = cache_dir()?;
     Ok(list_story_keys(&dir))
 }
 
@@ -100,8 +92,8 @@ fn list_story_keys(cache_dir: &std::path::Path) -> Vec<String> {
 
 /// Get cache status information.
 #[tauri::command]
-pub async fn get_cache_status(app: AppHandle) -> Result<CacheStatus, String> {
-    let dir = cache_dir(&app)?;
+pub async fn get_cache_status() -> Result<CacheStatus, String> {
+    let dir = cache_dir()?;
 
     let story_index_cached = dir.join("story-index.json").exists();
     let asset_db_cached = dir.join("asset-databases.json").exists();
@@ -118,8 +110,8 @@ pub async fn get_cache_status(app: AppHandle) -> Result<CacheStatus, String> {
 
 /// Clear all cached data.
 #[tauri::command]
-pub async fn clear_cache(app: AppHandle) -> Result<(), String> {
-    let dir = cache_dir(&app)?;
+pub async fn clear_cache() -> Result<(), String> {
+    let dir = cache_dir()?;
     if dir.exists() {
         std::fs::remove_dir_all(&dir)
             .map_err(|e| format!("Failed to clear cache: {}", e))?;

@@ -1,13 +1,8 @@
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
 
-/// Get the assets directory path.
-fn assets_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    let assets_dir = dir.join("assets");
+/// Get the assets directory path (under the configurable data root).
+fn assets_dir() -> Result<PathBuf, String> {
+    let assets_dir = crate::data_root::data_root().join("assets");
     std::fs::create_dir_all(&assets_dir)
         .map_err(|e| format!("Failed to create assets dir: {}", e))?;
     Ok(assets_dir)
@@ -20,9 +15,8 @@ pub async fn download_asset(
     url: String,
     category: String,
     filename: String,
-    app: AppHandle,
 ) -> Result<String, String> {
-    let dir = assets_dir(&app)?;
+    let dir = assets_dir()?;
     let category_dir = dir.join(&category);
     std::fs::create_dir_all(&category_dir)
         .map_err(|e| format!("Failed to create category dir: {}", e))?;
@@ -67,9 +61,8 @@ pub async fn download_asset(
 pub async fn get_asset_path(
     category: String,
     filename: String,
-    app: AppHandle,
 ) -> Result<Option<String>, String> {
-    let dir = assets_dir(&app)?;
+    let dir = assets_dir()?;
     let path = dir.join(&category).join(&filename);
 
     if path.exists() {
@@ -84,9 +77,8 @@ pub async fn get_asset_path(
 pub async fn read_asset_text(
     category: String,
     filename: String,
-    app: AppHandle,
 ) -> Result<Option<String>, String> {
-    let dir = assets_dir(&app)?;
+    let dir = assets_dir()?;
     let path = dir.join(&category).join(&filename);
 
     if path.exists() {
@@ -104,13 +96,8 @@ pub async fn read_asset_text(
 #[tauri::command]
 pub async fn batch_download_assets(
     urls: Vec<String>,
-    app: AppHandle,
 ) -> Result<BatchDownloadResult, String> {
-    let root = crate::media::media_root(
-        &app.path()
-            .app_data_dir()
-            .map_err(|e| format!("Failed to get app data dir: {}", e))?,
-    );
+    let root = crate::media::media_root(&crate::data_root::data_root());
     let client = reqwest::Client::new();
 
     let (mut success, mut failed, mut skipped) = (0u32, 0u32, 0u32);

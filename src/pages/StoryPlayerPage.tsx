@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { bootEngineInFrame } from "../lib/engineBoot";
-import { captureManifest, ensureScript, loadBundle } from "../lib/predownload";
-import type { BatchResult } from "../lib/predownload";
+import { loadBundle } from "../lib/predownload";
 
 /**
  * Story player page — loads the ORIGINAL PRTS ScenarioSimulator engine via bootEngine().
@@ -22,7 +21,6 @@ export default function StoryPlayerPage() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("正在加载...");
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
   const decodedTitle = pageTitle ? decodeURIComponent(pageTitle) : "";
 
@@ -93,23 +91,6 @@ export default function StoryPlayerPage() {
 
   const handleBack = () => navigate("/browse");
 
-  const predownloadThis = async () => {
-    setBusy(true);
-    try {
-      setStatus("正在解析资源清单...");
-      const bundle = await loadBundle();
-      const script = await ensureScript(decodedTitle);
-      const urls = await captureManifest(bundle, script, decodedTitle);
-      setStatus(`正在下载 ${urls.length} 个资源...`);
-      const res = await invoke<BatchResult>("batch_download_assets", { urls });
-      setStatus(`完成：成功${res.success} 跳过${res.skipped} 失败${res.failed}`);
-    } catch (e) {
-      setStatus(`预下载失败: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (error) {
     return (
       <div style={centerStyle}>
@@ -122,16 +103,12 @@ export default function StoryPlayerPage() {
   return (
     <div style={{ width: "100%", height: "100%", background: "#000", position: "relative" }}>
       <button onClick={handleBack} style={backBtnStyle}>◀ 返回</button>
-      <button onClick={predownloadThis} disabled={busy} style={preBtnStyle}>
-        {busy ? "下载中…" : "预下载本剧情资源"}
-      </button>
 
       {loading && (
         <div style={centerStyle}>
           <div style={{ color: "#929292", fontSize: "16px" }}>{status}</div>
         </div>
       )}
-      {!loading && busy && <div style={statusBarStyle}>{status}</div>}
 
       <div
         ref={containerRef}
@@ -175,29 +152,3 @@ const backBtnStyle: React.CSSProperties = {
   fontSize: "13px",
 };
 
-const preBtnStyle: React.CSSProperties = {
-  position: "fixed",
-  top: "8px",
-  right: "8px",
-  zIndex: 9999,
-  padding: "4px 12px",
-  background: "rgba(0,0,0,0.6)",
-  color: "white",
-  border: "1px solid rgba(255,255,255,0.3)",
-  borderRadius: "3px",
-  cursor: "pointer",
-  fontSize: "13px",
-};
-
-const statusBarStyle: React.CSSProperties = {
-  position: "fixed",
-  bottom: "8px",
-  left: "50%",
-  transform: "translateX(-50%)",
-  zIndex: 9999,
-  padding: "4px 12px",
-  background: "rgba(0,0,0,0.7)",
-  color: "#f4c430",
-  borderRadius: "3px",
-  fontSize: "12px",
-};

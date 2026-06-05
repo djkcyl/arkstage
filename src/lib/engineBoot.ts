@@ -1,5 +1,6 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { PROXY_BASE, WIKI_CDN_DOMAINS, proxyUrl, rewriteAllCdnUrls } from "./proxy";
+import { captureIframe, pushLog } from "./debugLog";
 
 /**
  * Boots the original PRTS ScenarioSimulator engine inside an ISOLATED <iframe>
@@ -47,10 +48,14 @@ export const EXTERNALS = {
   font: { url: "https://static.prts.wiki/assets/scenario/fonts/NotoSans.ttf", filename: "NotoSans.ttf" },
 };
 
+// Count of engine script blocks in the last boot (for the diagnostic probe).
+let bundleScriptCount = 0;
+
 export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBootResult> {
   const { iframe, bundle, script, title, mode } = opts;
   const isCancelled = opts.isCancelled ?? (() => false);
   const play = mode === "play";
+  bundleScriptCount = bundle.engine_scripts.length;
 
   const idoc = iframe.contentDocument;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -69,15 +74,29 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   // manifest mode keeps RAW CDN URLs so captured assets are original https URLs.
   const domHtml = play ? rewriteAllCdnUrls(bundle.dom_html) : bundle.dom_html;
   if (play) dataBlocksHtml = rewriteAllCdnUrls(dataBlocksHtml);
-  const heading = `<h1 id="firstHeading" style="display:none"><span class="mw-page-title-main">${escapeHtml(title)}</span></h1>`;
+  // NOTE: render off-screen rather than `display:none`. The engine reads the page
+  // name via `tarObj.innerText` in data.init(); on Chromium/WebView2 `innerText`
+  // of a non-rendered (display:none) element is "", which corrupts system.page and
+  // aborts boot — leaving the static "页面载入中…" screen. Off-screen keeps it
+  // rendered so innerText works, while staying invisible.
+  const heading = `<h1 id="firstHeading" style="position:absolute;left:-99999px;top:0"><span class="mw-page-title-main">${escapeHtml(title)}</span></h1>`;
 
+  // overflow:hidden so nothing ever shows a scrollbar: the off-screen #firstHeading
+  // (left:-99999px) and sub-pixel rounding in the scaled #sys_main would otherwise
+  // produce horizontal/vertical scrollbars, and the scrollbars toggling on/off
+  // during a window resize is what makes the stage "jitter".
+  const baseStyle = `<style>html,body{margin:0;height:100%;overflow:hidden;background:#000;}</style>`;
   idoc.open();
-  idoc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#000;">${heading}${domHtml}${dataBlocksHtml}</body></html>`);
+  idoc.write(`<!DOCTYPE html><html><head><meta charset="utf-8">${baseStyle}</head><body style="margin:0;background:#000;">${heading}${domHtml}${dataBlocksHtml}</body></html>`);
   idoc.close();
+
+  // Capture engine-side errors (uncaught script errors, failed asset loads, console)
+  // BEFORE any engine script runs, so the real cause of a stuck boot is visible.
+  captureIframe(iwin);
 
   if (play) {
     // URL-rewrite shim (patches the iframe's own Image/Audio/Source prototypes).
-    injectShimInDoc(idoc);
+    await runScriptCode(idoc, iwin, buildShimCode());
     // Font + CSS.
     const fontUrl = await ensureFontCached();
     await loadCssInDoc(idoc, fontUrl);
@@ -93,9 +112,12 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   if (isCancelled()) return {};
 
   // === Execute engine scripts (defines data/system/queue/fun_sys_preload, runs fun_sys_init) ===
+  // Run as Blob-URL <script src> (not inline). On WebView2 the engine's inline
+  // scripts silently did not execute (window.system/onload stayed undefined);
+  // a blob: script is exempt from 'unsafe-inline' and executes reliably.
   for (const code of bundle.engine_scripts) {
     if (isCancelled()) return {};
-    execInDoc(idoc, play ? rewriteAllCdnUrls(code) : code);
+    await runScriptCode(idoc, iwin, play ? rewriteAllCdnUrls(code) : code);
   }
 
   if (mode === "manifest") {
@@ -105,7 +127,56 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   // === Play: run jQuery ready (fun_sys_preload + event wiring) and window.onload ===
   processRLQ(iwin);
   triggerWindowOnload(iwin);
+  // Skip the engine's "long-press 1s to start preload" gate: kick off preloading
+  // immediately so the story is ready without the intermediate prompt screen.
+  autoStartPreload(iwin);
+  // Scale the fixed 960x540 stage to fill the window (the engine only does this in
+  // real browser fullscreen, leaving black margins in our windowed webview).
+  installWindowedFit(iwin, idoc);
+  reportBootHealth(iwin);
   return {};
+}
+
+/**
+ * After boot, surface why the engine might be stuck on the loading screen:
+ * whether engine globals initialized, and the engine's own captured error.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function reportBootHealth(iwin: any): void {
+  try {
+    // Probe what actually initialized, to distinguish causes:
+    //  jQuery/createjs="undefined" -> external dep <script src> didn't load/run
+    //  system/onload missing but deps present -> engine scripts (blob) failed
+    pushLog(
+      "info",
+      "[boot] probe:",
+      JSON.stringify({
+        jQuery: typeof iwin.$,
+        createjs: typeof iwin.createjs,
+        Timer: typeof iwin.Timer,
+        system: typeof iwin.system,
+        onload: typeof iwin.onload,
+        scripts: iwin.document?.scripts?.length,
+        engineScripts: bundleScriptCount,
+      })
+    );
+    if (typeof iwin.system === "undefined") {
+      pushLog(
+        "error",
+        "[engine] window.system is undefined — an engine script failed to execute before defining it."
+      );
+      return;
+    }
+    const err = iwin.system?.error;
+    if (err?.stat) {
+      pushLog("error", `[engine] ${err.type || "error"}: ${err.info}`);
+    }
+    if (typeof iwin.fun_sys_preload !== "function") {
+      pushLog("error", "[engine] fun_sys_preload not defined — engine init did not complete.");
+    }
+  } catch (e) {
+    pushLog("warn", "reportBootHealth failed:", e);
+  }
 }
 
 /**
@@ -141,9 +212,45 @@ function capturePreloadManifest(iwin: any): string[] {
 
 // ─── helpers (operate on the iframe's document/window) ──────────────────────
 
-/** Inject the dynamic URL-rewrite shim into a document; it patches that doc's prototypes. */
-function injectShimInDoc(idoc: Document): void {
-  const shimCode = `
+/**
+ * Execute script code in the iframe realm via a Blob-URL <script src> (resolves
+ * after it runs). Unlike an inline <script>, a blob: script is not subject to a
+ * CSP 'unsafe-inline' restriction and executes reliably on WebView2, where the
+ * engine's inline scripts were silently not running. Falls back to inline if
+ * Blob/URL are somehow unavailable.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function runScriptCode(idoc: Document, iwin: any, code: string): Promise<void> {
+  return new Promise<void>((resolve) => {
+    try {
+      const BlobCtor = iwin.Blob || Blob;
+      const URLObj = iwin.URL || URL;
+      const url: string = URLObj.createObjectURL(new BlobCtor([code], { type: "application/javascript" }));
+      const s = idoc.createElement("script");
+      s.src = url;
+      s.onload = () => {
+        if (url) URLObj.revokeObjectURL(url);
+        resolve();
+      };
+      s.onerror = () => {
+        if (url) URLObj.revokeObjectURL(url);
+        pushLog("error", "[engine] blob script failed to execute");
+        resolve();
+      };
+      idoc.body.appendChild(s);
+    } catch (e) {
+      pushLog("warn", "blob exec unavailable, falling back to inline:", e);
+      const s = idoc.createElement("script");
+      s.textContent = code;
+      idoc.body.appendChild(s);
+      resolve();
+    }
+  });
+}
+
+/** Build the dynamic URL-rewrite shim source (patches the doc's Image/Audio/Source src). */
+function buildShimCode(): string {
+  return `
 (function() {
   var PROXY_BASE = ${JSON.stringify(PROXY_BASE)};
   var CDN_DOMAINS = ${JSON.stringify(WIKI_CDN_DOMAINS)};
@@ -175,32 +282,49 @@ function injectShimInDoc(idoc: Document): void {
   };
   window.__prtsRewriteUrl = rewriteUrl;
 })();`;
-  const s = idoc.createElement("script");
-  s.textContent = shimCode;
-  s.setAttribute("data-prts-shim", "1");
-  (idoc.head || idoc.documentElement).appendChild(s);
 }
 
-/** Load CSS into a document: cached text (font + CDN patched), else proxied link. */
+/**
+ * Load the engine CSS as an inlined <style> whose url()s are rewritten to local
+ * paths. The stylesheet references its assets with ABSOLUTE https://static.prts.wiki
+ * URLs (the NotoSans font and the toolbar icons ui_playback/ui_playback_all/
+ * ui_fullscreen/ui_bug_report.png). Loaded as a plain <link>, those absolute URLs
+ * are NOT rewritten and get CSP-blocked (img-src/font-src) — which is exactly why
+ * the LOG / LOG ALL buttons rendered as empty boxes. So we obtain the CSS *text*
+ * and rewrite it before injecting:
+ *   1. the engine-asset cache (rarely populated), then
+ *   2. fetch through the offline-first prts-cdn proxy (the usual path — the CSS
+ *      lives in the media store).
+ * Only if both fail do we fall back to a proxied <link> (icons may then be blocked).
+ */
 async function loadCssInDoc(idoc: Document, localFontUrl: string): Promise<void> {
+  let cssText: string | null = null;
   try {
-    const cssText = await invoke<string | null>("read_asset_text", {
+    cssText = await invoke<string | null>("read_asset_text", {
       category: "engine",
       filename: EXTERNALS.css.filename,
     });
-    if (cssText) {
-      let patched = cssText.replace(
-        /url\(['"]?https:\/\/static\.prts\.wiki\/assets\/scenario\/fonts\/NotoSans\.ttf['"]?\)/g,
-        `url("${localFontUrl}")`
-      );
-      patched = rewriteAllCdnUrls(patched);
-      const style = idoc.createElement("style");
-      style.textContent = patched;
-      idoc.head.appendChild(style);
-      return;
-    }
   } catch {
-    // fall through
+    // fall through to proxy fetch
+  }
+  if (!cssText) {
+    try {
+      const resp = await fetch(proxyUrl(EXTERNALS.css.url));
+      if (resp.ok) cssText = await resp.text();
+    } catch {
+      // fall through to <link>
+    }
+  }
+  if (cssText) {
+    let patched = cssText.replace(
+      /url\(['"]?https:\/\/static\.prts\.wiki\/assets\/scenario\/fonts\/NotoSans\.ttf['"]?\)/g,
+      `url("${localFontUrl}")`
+    );
+    patched = rewriteAllCdnUrls(patched);
+    const style = idoc.createElement("style");
+    style.textContent = patched;
+    idoc.head.appendChild(style);
+    return;
   }
   const link = idoc.createElement("link");
   link.rel = "stylesheet";
@@ -252,13 +376,6 @@ function loadScriptInDoc(idoc: Document, src: string): Promise<void> {
   });
 }
 
-/** Execute inline script code inside a document. */
-function execInDoc(idoc: Document, code: string): void {
-  const s = idoc.createElement("script");
-  s.textContent = code;
-  idoc.body.appendChild(s);
-}
-
 /** Process the MediaWiki Resource Loader Queue inside the iframe (runs document.ready). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function processRLQ(iwin: any): void {
@@ -269,10 +386,70 @@ function processRLQ(iwin: any): void {
         try {
           entry[1]();
         } catch (e) {
-          console.warn("RLQ callback error:", e);
+          pushLog("error", "[engine] RLQ/ready callback threw:", e);
         }
       }
     }
+  }
+}
+
+/**
+ * Bypass the engine's long-press gate. window.onload normally only wires the
+ * preload to a 1s mouse/touch hold on #sys_clicker (the "为避免意外的数据消耗，
+ * 剧情资源仅在长按1s后开始预载" screen) before calling system.preload.init().
+ * Calling preload.start() ourselves runs queue.load() right away. We replicate the
+ * engine's own guard from onload: it skips preload.init() entirely when the page is
+ * disabled or a preload error occurred, so we must not auto-start in those cases.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function autoStartPreload(iwin: any): void {
+  try {
+    const sys = iwin.system;
+    if (!sys || iwin.public_disabled || sys.disabled?.flag || sys.error?.stat) return;
+    if (typeof sys.preload?.start === "function") sys.preload.start();
+  } catch (e) {
+    pushLog("warn", "auto preload start failed:", e);
+  }
+}
+
+/**
+ * Make the engine's fixed 960x540 stage fill the iframe/window, centered and
+ * letterboxed, and keep it fitted on resize. The engine only rescales in real
+ * browser fullscreen (fun_fullscreen, keyed off screen.width); in a normal
+ * windowed webview #sys_main stays 960x540 with black margins around it. We
+ * replicate the engine's own scale math (scale #sys_main, center via #sys_offset)
+ * but drive it from the iframe's inner size, and defer to the engine when it is
+ * actually fullscreen so the two don't fight.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function installWindowedFit(iwin: any, idoc: Document): void {
+  try {
+    const fit = () => {
+      try {
+        // Real fullscreen is handled by the engine's own fun_fullscreen handler.
+        if (typeof iwin.fun_fullscreen_check === "function" && iwin.fun_fullscreen_check()) return;
+        const main = idoc.getElementById("sys_main");
+        const offset = idoc.getElementById("sys_offset");
+        if (!main || !offset) return;
+        const w = iwin.innerWidth || idoc.documentElement.clientWidth;
+        const h = iwin.innerHeight || idoc.documentElement.clientHeight;
+        if (!w || !h) return;
+        const s = Math.min(w / 960, h / 540);
+        main.style.transform = `scale(${s})`; // transform-origin is already top-left
+        offset.style.left = `${(w - 960 * s) / 2}px`;
+        offset.style.top = `${(h - 540 * s) / 2}px`;
+      } catch {
+        // ignore — leave the stage at its base size
+      }
+    };
+    iwin.addEventListener("resize", fit);
+    // After leaving fullscreen the engine clears the transform; re-fit afterwards.
+    const refit = () => setTimeout(fit, 0);
+    iwin.addEventListener("fullscreenchange", refit);
+    iwin.addEventListener("webkitfullscreenchange", refit);
+    fit();
+  } catch (e) {
+    pushLog("warn", "windowed fit setup failed:", e);
   }
 }
 
@@ -284,8 +461,10 @@ function triggerWindowOnload(iwin: any): void {
     try {
       iwin.onload(new Ev("load"));
     } catch (e) {
-      console.warn("window.onload error:", e);
+      pushLog("error", "[engine] window.onload threw:", e);
     }
+  } else {
+    pushLog("error", "[engine] window.onload is not a function after boot.");
   }
   try {
     iwin.dispatchEvent(new Ev("load"));

@@ -9,6 +9,7 @@
     "core:default",
     "core:app:default",
     "core:path:default",
-    "core:image:default"
+    "core:image:default",
+    "dialog:default"
   ]
 }
