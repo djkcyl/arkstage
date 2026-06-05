@@ -2,13 +2,30 @@ import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useStoryIndex } from "../hooks/useStoryIndex";
+import { predownloadScope } from "../lib/predownload";
+import type { PreProgress } from "../lib/predownload";
 
 export default function StoryBrowserPage() {
   const { index, loading, error, refresh } = useStoryIndex();
   const [search, setSearch] = useState("");
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
   const [cachedStories, setCachedStories] = useState<Set<string>>(new Set());
+  const [pre, setPre] = useState<PreProgress | null>(null);
   const navigate = useNavigate();
+
+  const runPredownload = async (titles: string[]) => {
+    if (pre) return; // already running
+    setPre({ phase: "manifest", done: 0, total: titles.length, label: "" });
+    try {
+      const { assets, result } = await predownloadScope(titles, setPre);
+      alert(`范围资源 ${assets} 个：成功${result.success} 跳过${result.skipped} 失败${result.failed}`);
+      invoke<string[]>("list_cached_stories").then((list) => setCachedStories(new Set(list))).catch(() => {});
+    } catch (e) {
+      alert(`预下载失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setPre(null);
+    }
+  };
 
   // Load cached story list
   useEffect(() => {
@@ -97,13 +114,36 @@ export default function StoryBrowserPage() {
               <span style={{ fontSize: "13px", color: "var(--text-secondary)", marginLeft: "auto" }}>
                 {cat.chapters.reduce((n, ch) => n + ch.stories.length, 0)} 个剧情
               </span>
+              <button
+                className="nav-btn"
+                style={{ marginLeft: "12px", fontSize: "12px" }}
+                disabled={!!pre}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  runPredownload(cat.chapters.flatMap((ch) => ch.stories.map((s) => s.page_title)));
+                }}
+                title="预下载本分类全部资源"
+              >
+                ⬇ 预下载
+              </button>
             </div>
 
             {openCategories[cat.name] !== false && (
               <div>
                 {cat.chapters.map((ch, ci) => (
                   <div key={ci} className="chapter">
-                    <div className="chapter-name">{ch.name}</div>
+                    <div className="chapter-name">
+                      {ch.name}
+                      <button
+                        className="nav-btn"
+                        style={{ marginLeft: "10px", fontSize: "11px" }}
+                        disabled={!!pre}
+                        onClick={() => runPredownload(ch.stories.map((s) => s.page_title))}
+                        title="预下载本章资源"
+                      >
+                        ⬇
+                      </button>
+                    </div>
                     <div className="story-list">
                       {ch.stories.map((story, si) => (
                         <span
@@ -127,6 +167,26 @@ export default function StoryBrowserPage() {
           <div className="loading">未找到剧情</div>
         )}
       </div>
+
+      {pre && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 0,
+            left: 0,
+            right: 0,
+            padding: "8px 16px",
+            background: "rgba(0,0,0,0.85)",
+            color: "#f4c430",
+            fontSize: "13px",
+            zIndex: 9999,
+          }}
+        >
+          {pre.phase === "manifest"
+            ? `解析资源清单 ${pre.done}/${pre.total} ${pre.label}`
+            : `下载资源 ${pre.total} 个…`}
+        </div>
+      )}
     </div>
   );
 }

@@ -15,12 +15,36 @@ export default function SettingsPage() {
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [allowOnline, setAllowOnline] = useState(true);
 
   useEffect(() => {
     const saved = localStorage.getItem("prts-nickname");
     if (saved) setNickname(saved);
     refreshCacheStatus();
+    invoke<boolean>("get_allow_online").then(setAllowOnline).catch(() => {});
   }, []);
+
+  const toggleAllowOnline = async () => {
+    const next = !allowOnline;
+    await invoke("set_allow_online", { value: next });
+    setAllowOnline(next);
+    showMsg(next ? "已允许联网（缺失资源将自动拉取并缓存）" : "已禁止联网（缺失资源将提示获取）");
+  };
+
+  const updateGlobalData = async () => {
+    setBusy(true);
+    showMsg("正在更新全局数据...", 0);
+    try {
+      const bundle = await invoke("fetch_widget_bundle", { pageTitle: "W2G/BEG" });
+      await invoke("save_to_cache", { key: "widget-bundle-v2", data: JSON.stringify(bundle) });
+      showMsg("全局数据已更新");
+      refreshCacheStatus();
+    } catch (e) {
+      showMsg(`错误: ${e}`, 5000);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const refreshCacheStatus = useCallback(async () => {
     try {
@@ -133,12 +157,28 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      {/* Network policy */}
+      <div className="setting-group">
+        <label>联网策略</label>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <button className="nav-btn" onClick={toggleAllowOnline}>
+            {allowOnline ? "联网：开" : "联网：关"}
+          </button>
+          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+            {allowOnline ? "缺失资源将自动从 PRTS 拉取并缓存" : "仅播放已缓存资源，缺失时提示获取"}
+          </span>
+        </div>
+      </div>
+
       {/* Cache Management */}
       <div className="setting-group">
         <label>缓存管理</label>
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
           <button className="btn-primary" onClick={precacheEngine} disabled={busy}>
             预缓存引擎
+          </button>
+          <button className="btn-primary" onClick={updateGlobalData} disabled={busy}>
+            更新全局数据
           </button>
           <button className="btn-primary" onClick={precacheIndex} disabled={busy}>
             预缓存目录
