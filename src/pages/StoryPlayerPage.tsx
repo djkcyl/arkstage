@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { bootEngine, cleanupEngineTimers, cleanupGlobals } from "../lib/engineBoot";
+import { bootEngineInFrame } from "../lib/engineBoot";
 import { captureManifest, ensureScript, loadBundle } from "../lib/predownload";
 import type { BatchResult } from "../lib/predownload";
 
@@ -19,7 +19,6 @@ export default function StoryPlayerPage() {
   const { pageTitle } = useParams<{ pageTitle: string }>();
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
-  const addedRef = useRef<HTMLElement[]>([]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("正在加载...");
   const [error, setError] = useState<string | null>(null);
@@ -53,17 +52,20 @@ export default function StoryPlayerPage() {
         }
         if (cancelled) return;
 
-        // === Step 3: Boot the engine ===
+        // === Step 3: Boot the engine inside an isolated iframe realm ===
         setStatus("正在初始化播放器...");
-        const { addedElements } = await bootEngine({
-          container,
+        const iframe = document.createElement("iframe");
+        iframe.style.cssText = "width:100%;height:100%;border:0;display:block;background:#000;";
+        container.innerHTML = "";
+        container.appendChild(iframe);
+        await bootEngineInFrame({
+          iframe,
           bundle,
           script: storyData.script,
           title: decodedTitle,
           mode: "play",
           isCancelled: () => cancelled,
         });
-        addedRef.current = addedElements;
 
         setLoading(false);
       } catch (e) {
@@ -76,14 +78,16 @@ export default function StoryPlayerPage() {
 
     return () => {
       cancelled = true;
-      document.querySelectorAll("#sys_audio audio").forEach((el) => {
-        (el as HTMLAudioElement).pause();
-      });
-      cleanupEngineTimers();
-      addedRef.current.forEach((el) => el.remove());
-      addedRef.current = [];
+      // Removing the iframe disposes the whole engine realm (timers, audio, globals).
+      try {
+        container
+          .querySelector("iframe")
+          ?.contentDocument?.querySelectorAll("#sys_audio audio")
+          .forEach((el) => (el as HTMLAudioElement).pause());
+      } catch {
+        // ignore cross-realm access errors
+      }
       container.innerHTML = "";
-      cleanupGlobals();
     };
   }, [decodedTitle]);
 
