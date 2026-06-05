@@ -37,7 +37,7 @@ export interface BootResult {
 }
 
 // External engine resources: remote URL + local cache filename.
-const EXTERNALS = {
+export const EXTERNALS = {
   css: {
     url: "https://static.prts.wiki/assets/scenario/arknights-scenario.css",
     filename: "arknights-scenario.css",
@@ -113,12 +113,9 @@ export async function bootEngine(opts: BootOptions): Promise<BootResult> {
     addedElements.push(executeScript(code));
   }
 
-  if (mode === "manifest") {
-    // Hook PreloadJS at the prototype level (the engine's `queue` is a script-scoped
-    // const, not on window), run fun_sys_preload, and capture the queued URLs.
-    const manifest = capturePreloadManifest();
-    return { addedElements, manifest };
-  }
+  // NOTE: manifest capture is NOT done here — re-running the engine in the main
+  // window realm collides with its top-level `const` declarations. Manifest
+  // capture runs in an isolated iframe realm; see captureManifest in predownload.ts.
 
   // === Process RLQ (runs jQuery ready -> fun_sys_preload + event wiring) ===
   processRLQ();
@@ -127,38 +124,6 @@ export async function bootEngine(opts: BootOptions): Promise<BootResult> {
   triggerWindowOnload();
 
   return { addedElements };
-}
-
-/**
- * Override createjs.LoadQueue.prototype.loadFile to record URLs, call the engine's
- * own fun_sys_preload() (which resolves the deduped asset set), then restore.
- * No network happens because queue.load() is never called.
- */
-function capturePreloadManifest(): string[] {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w = window as any;
-  const captured: string[] = [];
-  const proto = w.createjs?.LoadQueue?.prototype;
-  if (!proto || typeof proto.loadFile !== "function") {
-    console.warn("captureManifest: createjs.LoadQueue not available");
-    return [];
-  }
-  const orig = proto.loadFile;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  proto.loadFile = function (item: any) {
-    const url = typeof item === "string" ? item : item?.src ?? item?.path;
-    if (typeof url === "string") captured.push(url);
-    // Intentionally do NOT call orig -> avoid queueing/loading.
-  };
-  try {
-    if (typeof w.fun_sys_preload === "function") w.fun_sys_preload();
-    else console.warn("captureManifest: fun_sys_preload not defined");
-  } catch (e) {
-    console.warn("fun_sys_preload capture error:", e);
-  } finally {
-    proto.loadFile = orig;
-  }
-  return Array.from(new Set(captured));
 }
 
 // ─── Helpers (moved verbatim from StoryPlayerPage) ──────────────────────────
@@ -283,7 +248,7 @@ async function loadCssPatched(localFontUrl: string): Promise<HTMLElement> {
 }
 
 /** Try local cache first, fall back to proxy URL (not direct CDN). */
-async function resolveAssetUrl(ext: { url: string; filename: string }): Promise<string> {
+export async function resolveAssetUrl(ext: { url: string; filename: string }): Promise<string> {
   try {
     const localPath = await invoke<string | null>("get_asset_path", {
       category: "engine",
