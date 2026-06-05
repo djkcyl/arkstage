@@ -79,8 +79,8 @@ function levelColor(level: string): string {
 
 const toggleStyle: React.CSSProperties = {
   position: "fixed",
-  bottom: 8,
-  left: 8,
+  bottom: "calc(8px + env(safe-area-inset-bottom, 0px))",
+  left: "calc(8px + env(safe-area-inset-left, 0px))",
   zIndex: 99999,
   padding: "4px 10px",
   color: "white",
@@ -92,8 +92,8 @@ const toggleStyle: React.CSSProperties = {
 
 const panelStyle: React.CSSProperties = {
   position: "fixed",
-  bottom: 8,
-  left: 8,
+  bottom: "calc(8px + env(safe-area-inset-bottom, 0px))",
+  left: "calc(8px + env(safe-area-inset-left, 0px))",
   zIndex: 99999,
   width: "min(720px, 90vw)",
   height: "min(320px, 50vh)",

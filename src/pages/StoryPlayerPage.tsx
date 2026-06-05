@@ -140,8 +140,8 @@ const btnStyle: React.CSSProperties = {
 
 const backBtnStyle: React.CSSProperties = {
   position: "fixed",
-  top: "8px",
-  left: "8px",
+  top: "calc(8px + env(safe-area-inset-top, 0px))",
+  left: "calc(8px + env(safe-area-inset-left, 0px))",
   zIndex: 9999,
   padding: "4px 12px",
   background: "rgba(0,0,0,0.6)",

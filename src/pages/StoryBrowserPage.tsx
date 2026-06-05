@@ -86,7 +86,7 @@ export default function StoryBrowserPage() {
   }
 
   return (
-    <div className="story-browser">
+    <div className="browser-page story-browser">
       <div className="browser-header">
         <button className="nav-btn" onClick={() => navigate("/")}>◀</button>
         <h1>剧情一览</h1>

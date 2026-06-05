@@ -13,6 +13,7 @@ export default function HomePage() {
         height: "100%",
         gap: "32px",
         padding: "24px",
+        paddingTop: "calc(24px + env(safe-area-inset-top, 0px))",
       }}
     >
       <h1
