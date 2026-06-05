@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoryIndex {
@@ -28,22 +27,6 @@ pub struct StoryEntry {
 pub struct StoryPageData {
     pub script: String,
     pub title: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AssetDatabases {
-    pub backgrounds: HashMap<String, String>,
-    pub characters: HashMap<String, String>,
-    pub audio: serde_json::Value,
-    pub link: serde_json::Value,
-    pub overrides: Vec<OverrideEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OverrideEntry {
-    pub kind: String,
-    pub key: String,
-    pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

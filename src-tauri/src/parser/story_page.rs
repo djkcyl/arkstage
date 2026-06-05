@@ -28,37 +28,6 @@ pub fn extract_story_script(html: &str) -> Option<StoryPageData> {
     Some(StoryPageData { script, title })
 }
 
-/// Extract all raw data blocks from a story page HTML.
-/// Returns (backgrounds_csv, characters_csv, audio_json, link_json, override_text)
-pub fn extract_data_blocks(html: &str) -> DataBlocks {
-    let document = Html::parse_document(html);
-
-    let get_block = |id: &str| -> String {
-        let sel = Selector::parse(&format!("#{}", id)).unwrap();
-        document
-            .select(&sel)
-            .next()
-            .map(|el| el.text().collect::<String>())
-            .unwrap_or_default()
-    };
-
-    DataBlocks {
-        backgrounds: get_block("datas_back"),
-        characters: get_block("datas_char"),
-        audio: get_block("datas_audio"),
-        link: get_block("datas_link"),
-        overrides: get_block("datas_override"),
-    }
-}
-
-pub struct DataBlocks {
-    pub backgrounds: String,
-    pub characters: String,
-    pub audio: String,
-    pub link: String,
-    pub overrides: String,
-}
-
 /// Extract the complete widget HTML needed to run the original ScenarioSimulator.
 /// Returns: DOM structure, data block elements, and inline script blocks.
 pub fn extract_widget_html(html: &str) -> WidgetBundle {

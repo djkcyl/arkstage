@@ -99,6 +99,9 @@ export default function StoryPlayerPage() {
     let cancelled = false;
     const container = containerRef.current;
     const addedElements: HTMLElement[] = [];
+    // Snapshot window keys before engine scripts run so cleanup can delete new globals.
+    // This prevents React StrictMode double-invocation from re-declaring engine vars.
+    let windowKeysBefore: Set<string> | null = null;
 
     (async () => {
       try {
@@ -195,6 +198,8 @@ export default function StoryPlayerPage() {
         setupMwShims();
 
         // === Step 8: Execute engine scripts ===
+        // Snapshot window keys so cleanup can remove any globals the engine declares.
+        windowKeysBefore = new Set(Object.keys(window));
         // Rewrite CDN URLs in engine script code too
         for (const scriptCode of bundle.engine_scripts) {
           if (cancelled) return;
@@ -231,7 +236,7 @@ export default function StoryPlayerPage() {
       cleanupEngineTimers();
       addedElements.forEach((el) => el.remove());
       container.innerHTML = "";
-      cleanupGlobals();
+      cleanupGlobals(windowKeysBefore);
     };
   }, [decodedTitle]);
 
@@ -547,7 +552,7 @@ function cleanupEngineTimers() {
   }
 }
 
-function cleanupGlobals() {
+function cleanupGlobals(windowKeysBefore: Set<string> | null = null) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as any;
   const globals = [
@@ -557,6 +562,15 @@ function cleanupGlobals() {
   ];
   for (const g of globals) {
     try { delete w[g]; } catch { /* non-configurable */ }
+  }
+  // Also delete any window keys added by engine scripts (e.g. log_limit_px).
+  // This prevents React StrictMode double-invocation from causing "duplicate variable" errors.
+  if (windowKeysBefore) {
+    for (const key of Object.keys(window)) {
+      if (!windowKeysBefore.has(key)) {
+        try { delete w[key]; } catch { /* non-configurable */ }
+      }
+    }
   }
   document.querySelectorAll("[data-prts-engine]").forEach((el) => el.remove());
   document.querySelectorAll("[data-prts-shim]").forEach((el) => el.remove());

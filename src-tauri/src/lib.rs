@@ -1,9 +1,25 @@
 mod commands;
+mod media;
 mod models;
+mod net_state;
 mod parser;
 
 use commands::{assets, cache, wiki};
 use std::sync::OnceLock;
+use tauri::Manager;
+
+/// App data dir captured at setup(), read by the prts-cdn:// handler (which has no AppHandle).
+static APP_DATA_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+/// Build a small error response with permissive CORS.
+fn respond_err(responder: tauri::UriSchemeResponder, status: u16, msg: String) {
+    let r = tauri::http::Response::builder()
+        .status(status)
+        .header("Access-Control-Allow-Origin", "*")
+        .body(msg.into_bytes())
+        .unwrap();
+    responder.respond(r);
+}
 
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -77,6 +93,36 @@ pub fn run() {
             let target_url = format!("https://{}{}", path, query);
             let content_type = guess_content_type(path);
 
+            let media_root = APP_DATA_DIR.get().map(|d| media::media_root(d));
+
+            // 1) Serve from local content-addressed store if present (offline).
+            if let Some(root) = &media_root {
+                if let Some(bytes) = media::read_local(root, &target_url) {
+                    let r = tauri::http::Response::builder()
+                        .status(200)
+                        .header("Content-Type", content_type)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(bytes)
+                        .unwrap();
+                    responder.respond(r);
+                    return;
+                }
+            }
+
+            // 2) Not cached and offline mode: refuse with a marker the frontend detects.
+            if !net_state::allow_online() {
+                let r = tauri::http::Response::builder()
+                    .status(503)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("X-PRTS-Offline", "1")
+                    .body(b"offline: asset not cached".to_vec())
+                    .unwrap();
+                responder.respond(r);
+                return;
+            }
+
+            // 3) Online: fetch, persist to store (cache-through), serve.
+            let media_root = media_root.clone();
             tauri::async_runtime::spawn(async move {
                 let client = http_client();
                 match client
@@ -86,7 +132,6 @@ pub fn run() {
                     .await
                 {
                     Ok(resp) if resp.status().is_success() => {
-                        // Use upstream content-type if available, otherwise guess
                         let ct = resp
                             .headers()
                             .get("content-type")
@@ -96,6 +141,9 @@ pub fn run() {
 
                         match resp.bytes().await {
                             Ok(bytes) => {
+                                if let Some(root) = &media_root {
+                                    let _ = media::write_local(root, &target_url, &bytes);
+                                }
                                 let r = tauri::http::Response::builder()
                                     .status(200)
                                     .header("Content-Type", ct)
@@ -104,37 +152,21 @@ pub fn run() {
                                     .unwrap();
                                 responder.respond(r);
                             }
-                            Err(e) => {
-                                let r = tauri::http::Response::builder()
-                                    .status(502)
-                                    .header("Access-Control-Allow-Origin", "*")
-                                    .body(format!("Read error: {}", e).into_bytes())
-                                    .unwrap();
-                                responder.respond(r);
-                            }
+                            Err(e) => respond_err(responder, 502, format!("Read error: {}", e)),
                         }
                     }
                     Ok(resp) => {
                         let status = resp.status().as_u16();
-                        let r = tauri::http::Response::builder()
-                            .status(status)
-                            .header("Access-Control-Allow-Origin", "*")
-                            .body(format!("Upstream returned {}", status).into_bytes())
-                            .unwrap();
-                        responder.respond(r);
+                        respond_err(responder, status, format!("Upstream returned {}", status));
                     }
-                    Err(e) => {
-                        let r = tauri::http::Response::builder()
-                            .status(502)
-                            .header("Access-Control-Allow-Origin", "*")
-                            .body(format!("Fetch error: {}", e).into_bytes())
-                            .unwrap();
-                        responder.respond(r);
-                    }
+                    Err(e) => respond_err(responder, 502, format!("Fetch error: {}", e)),
                 }
             });
         })
         .setup(|app| {
+            if let Ok(dir) = app.path().app_data_dir() {
+                let _ = APP_DATA_DIR.set(dir);
+            }
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -148,7 +180,6 @@ pub fn run() {
             // Wiki fetching
             wiki::fetch_story_index,
             wiki::fetch_story_page,
-            wiki::fetch_asset_databases,
             wiki::fetch_widget_bundle,
             // Cache management
             cache::save_to_cache,
@@ -162,6 +193,9 @@ pub fn run() {
             assets::get_asset_path,
             assets::read_asset_text,
             assets::batch_download_assets,
+            // Network policy
+            net_state::set_allow_online,
+            net_state::get_allow_online,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

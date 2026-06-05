@@ -98,62 +98,60 @@ pub async fn read_asset_text(
     }
 }
 
-/// Batch download multiple assets. Returns the number of successfully downloaded assets.
+/// Download a list of absolute CDN URLs into the content-addressed media store
+/// (`$APPDATA/media/{host}/{path}`). Already-present files are skipped (cross-story
+/// dedup). Sends a Referer header to avoid CDN 403s.
 #[tauri::command]
 pub async fn batch_download_assets(
-    assets: Vec<AssetDownloadRequest>,
+    urls: Vec<String>,
     app: AppHandle,
 ) -> Result<BatchDownloadResult, String> {
-    let dir = assets_dir(&app)?;
+    let root = crate::media::media_root(
+        &app.path()
+            .app_data_dir()
+            .map_err(|e| format!("Failed to get app data dir: {}", e))?,
+    );
     let client = reqwest::Client::new();
 
-    let mut success_count = 0u32;
-    let mut fail_count = 0u32;
-    let total = assets.len() as u32;
+    let (mut success, mut failed, mut skipped) = (0u32, 0u32, 0u32);
+    let total = urls.len() as u32;
 
-    for asset in assets {
-        let category_dir = dir.join(&asset.category);
-        std::fs::create_dir_all(&category_dir).ok();
-
-        let path = category_dir.join(&asset.filename);
-        if path.exists() {
-            success_count += 1;
-            continue;
+    for url in urls {
+        match crate::media::store_path(&root, &url) {
+            Some(p) if p.exists() => {
+                skipped += 1;
+                continue;
+            }
+            None => {
+                failed += 1;
+                continue;
+            }
+            _ => {}
         }
 
         match client
-            .get(&asset.url)
-            .header("User-Agent", "PRTSReader/0.1")
+            .get(&url)
+            .header("Referer", "https://prts.wiki/")
             .send()
             .await
         {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(bytes) = resp.bytes().await {
-                    if std::fs::write(&path, &bytes).is_ok() {
-                        success_count += 1;
-                        continue;
-                    }
-                }
-                fail_count += 1;
-            }
-            _ => {
-                fail_count += 1;
-            }
+            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                Ok(bytes) => match crate::media::write_local(&root, &url, &bytes) {
+                    Ok(()) => success += 1,
+                    Err(_) => failed += 1,
+                },
+                Err(_) => failed += 1,
+            },
+            _ => failed += 1,
         }
     }
 
     Ok(BatchDownloadResult {
         total,
-        success: success_count,
-        failed: fail_count,
+        success,
+        failed,
+        skipped,
     })
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct AssetDownloadRequest {
-    pub url: String,
-    pub category: String,
-    pub filename: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -161,4 +159,5 @@ pub struct BatchDownloadResult {
     pub total: u32,
     pub success: u32,
     pub failed: u32,
+    pub skipped: u32,
 }

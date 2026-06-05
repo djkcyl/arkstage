@@ -1,5 +1,5 @@
-use crate::models::{AssetDatabases, StoryIndex, StoryPageData, WidgetBundleData};
-use crate::parser::{asset_database, story_index, story_page};
+use crate::models::{StoryIndex, StoryPageData, WidgetBundleData};
+use crate::parser::{story_index, story_page};
 
 const _WIKI_API: &str = "https://prts.wiki/api.php";
 
@@ -81,16 +81,6 @@ pub async fn fetch_story_page(page_title: String) -> Result<StoryPageData, Strin
     let html = fetch_page_raw(&page_title).await?;
     story_page::extract_story_script(&html)
         .ok_or_else(|| format!("No story script found on page: {}", page_title))
-}
-
-/// Fetch the shared asset databases from any story page.
-/// These are identical across all story pages, so we only need to fetch once.
-#[tauri::command]
-pub async fn fetch_asset_databases() -> Result<AssetDatabases, String> {
-    // Use a known story page to extract the shared databases
-    let html = fetch_page_raw("W2G/BEG").await?;
-    let blocks = story_page::extract_data_blocks(&html);
-    Ok(asset_database::parse_asset_databases(blocks))
 }
 
 /// Fetch the original ScenarioSimulator widget bundle from any story page.

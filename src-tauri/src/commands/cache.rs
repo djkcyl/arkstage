@@ -79,25 +79,23 @@ pub async fn delete_from_cache(
 #[tauri::command]
 pub async fn list_cached_stories(app: AppHandle) -> Result<Vec<String>, String> {
     let dir = cache_dir(&app)?;
-    let stories_dir = dir.join("stories");
+    Ok(list_story_keys(&dir))
+}
 
-    if !stories_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut stories = Vec::new();
-    let entries = std::fs::read_dir(&stories_dir)
-        .map_err(|e| format!("Failed to read stories dir: {}", e))?;
-
-    for entry in entries.flatten() {
-        if let Some(name) = entry.file_name().to_str() {
-            if name.ends_with(".json") {
-                stories.push(name.trim_end_matches(".json").to_string());
+/// List cache keys for stored stories. Stories are saved as flat files named
+/// `stories_*.json` (the `/` in the key is sanitized to `_`), so we scan by prefix.
+fn list_story_keys(cache_dir: &std::path::Path) -> Vec<String> {
+    let mut keys = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(cache_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.starts_with("stories_") && name.ends_with(".json") {
+                    keys.push(name.trim_end_matches(".json").to_string());
+                }
             }
         }
     }
-
-    Ok(stories)
+    keys
 }
 
 /// Get cache status information.
@@ -107,7 +105,7 @@ pub async fn get_cache_status(app: AppHandle) -> Result<CacheStatus, String> {
 
     let story_index_cached = dir.join("story-index.json").exists();
     let asset_db_cached = dir.join("asset-databases.json").exists();
-    let cached_stories = list_cached_stories_internal(&dir);
+    let cached_stories = list_story_keys(&dir);
     let total_size_bytes = dir_size(&dir);
 
     Ok(CacheStatus {
@@ -129,25 +127,6 @@ pub async fn clear_cache(app: AppHandle) -> Result<(), String> {
             .map_err(|e| format!("Failed to recreate cache dir: {}", e))?;
     }
     Ok(())
-}
-
-fn list_cached_stories_internal(cache_dir: &PathBuf) -> Vec<String> {
-    let stories_dir = cache_dir.join("stories");
-    if !stories_dir.exists() {
-        return Vec::new();
-    }
-
-    let mut stories = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&stories_dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                if name.ends_with(".json") {
-                    stories.push(name.trim_end_matches(".json").to_string());
-                }
-            }
-        }
-    }
-    stories
 }
 
 fn dir_size(path: &PathBuf) -> u64 {
@@ -179,4 +158,28 @@ fn sanitize_filename(s: &str) -> String {
             _ => c,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn lists_flat_story_files_by_prefix() {
+        let tmp = std::env::temp_dir().join(format!("prts_cache_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("stories_W2G_BEG.json"), "{}").unwrap();
+        fs::write(tmp.join("stories_W2G_END.json"), "{}").unwrap();
+        fs::write(tmp.join("story-index.json"), "{}").unwrap();
+
+        let mut got = list_story_keys(&tmp);
+        got.sort();
+        assert_eq!(
+            got,
+            vec!["stories_W2G_BEG".to_string(), "stories_W2G_END".to_string()]
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
 }
