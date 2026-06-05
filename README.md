@@ -113,6 +113,8 @@ cargo build --manifest-path src-tauri/Cargo.toml   # 仅编译后端（debug）
 
 > 说明：`npm run tauri:build` 是**完整构建**——它会先打包前端（`npm run build`），再编译 Rust 后端并生成安装包，无需单独构建后端。上面的 `cargo` 命令仅用于单独测试 / 编译后端。
 
+> 📱 **Android**：见 [`docs/android-build.md`](docs/android-build.md)——`scripts/build-android.sh` 产出可侧载的 debug APK（应用私有外部存储 `getExternalFilesDir`，无资源目录选择器，其余功能与桌面对等）。
+
 ### 如何验证构建是否正确
 
 按从快到慢、从本地到云端的顺序：
