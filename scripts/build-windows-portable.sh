@@ -79,9 +79,11 @@ mkdir -p "$OUT"
 cp -f "$exe" "$OUT/prts-reader.exe"
 find "$REL_DIR" -maxdepth 1 -name '*.dll' -exec cp -f {} "$OUT/" \;
 
-# Zip it for easy transfer (zip if available, else leave the folder).
+# Zip it for easy transfer (zip if available, else leave the folder). Zip from
+# inside artifacts/ so the archive root is a single `prts-reader-portable/` folder
+# rather than the nested `build/artifacts/prts-reader-portable/` path.
 if command -v zip >/dev/null; then
-  zip -rq "$OUT.zip" "$OUT"
+  ( cd "$ARTIFACTS_DIR" && rm -f prts-reader-portable.zip && zip -rq prts-reader-portable.zip prts-reader-portable )
 fi
 
 # Clean the heavy intermediate cross-compile target dir (KEEP_TARGET=1 to keep).

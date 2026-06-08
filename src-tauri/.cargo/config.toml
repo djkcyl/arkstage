@@ -1,0 +1,12 @@
+# Cross-compiling to the GNU Windows target (the build-windows*.sh scripts) builds
+# the `cdylib` crate-type — app_lib.dll — which only exists for the mobile/Android
+# build. With the size-optimized [profile.release] (LTO) enabled, rustc marks a
+# very large number of symbols for export and the MinGW linker overflows the PE
+# export-ordinal table:
+#     x86_64-w64-mingw32-ld: error: export ordinal too large: 67572
+# The desktop .exe statically links the rlib and never loads this DLL, so we
+# suppress the cdylib's symbol exports for this target to make the link succeed.
+# Scoped to x86_64-pc-windows-gnu only — the MSVC CI build and Android targets are
+# unaffected.
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-arg=-Wl,--exclude-all-symbols"]
