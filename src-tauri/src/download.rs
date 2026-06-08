@@ -27,6 +27,20 @@ const PROGRESS_THROTTLE_MS: u128 = 150;
 /// Name of the progress event the frontend listens for.
 pub const PROGRESS_EVENT: &str = "download://progress";
 
+/// Where progress snapshots go. Abstracting this keeps `Manager`/the worker engine
+/// independent of Tauri's `AppHandle`, so they're testable in a plain async test.
+pub trait ProgressSink: Send + Sync {
+    fn emit(&self, snap: &Snapshot);
+}
+
+/// Production sink: forward each snapshot as a `download://progress` Tauri event.
+struct AppHandleSink(AppHandle);
+impl ProgressSink for AppHandleSink {
+    fn emit(&self, snap: &Snapshot) {
+        let _ = self.0.emit(PROGRESS_EVENT, snap);
+    }
+}
+
 /// Lifecycle of a download job. Encoded as `u8` for atomic storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -147,16 +161,16 @@ impl Job {
 
 /// Owns all jobs and the configurable concurrency. Held in Tauri managed state.
 pub struct Manager {
-    app: AppHandle,
+    sink: Arc<dyn ProgressSink>,
     jobs: Mutex<HashMap<u64, Arc<Job>>>,
     next_id: AtomicU64,
     concurrency: AtomicUsize,
 }
 
 impl Manager {
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new(sink: Arc<dyn ProgressSink>) -> Self {
         Manager {
-            app,
+            sink,
             jobs: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             concurrency: AtomicUsize::new(DEFAULT_CONCURRENCY),
@@ -191,13 +205,13 @@ impl Manager {
             let job = job.clone();
             let urls = urls.clone();
             let root = root.clone();
-            let app = self.app.clone();
-            tauri::async_runtime::spawn(worker(job, urls, root, app));
+            let sink = self.sink.clone();
+            tauri::async_runtime::spawn(worker(job, urls, root, sink));
         }
         // Edge case: empty job — no workers, finalize immediately.
         if total == 0 {
             job.set_status(Status::Completed);
-            emit(&self.app, &job.snapshot());
+            self.sink.emit(&job.snapshot());
         }
         id
     }
@@ -207,7 +221,7 @@ impl Manager {
             if job.status() == Status::Running {
                 job.paused.store(true, Ordering::Relaxed);
                 job.set_status(Status::Paused);
-                emit(&self.app, &job.snapshot());
+                self.sink.emit(&job.snapshot());
             }
         }
     }
@@ -217,7 +231,7 @@ impl Manager {
             if job.status() == Status::Paused {
                 job.paused.store(false, Ordering::Relaxed);
                 job.set_status(Status::Running);
-                emit(&self.app, &job.snapshot());
+                self.sink.emit(&job.snapshot());
             }
         }
     }
@@ -243,7 +257,12 @@ impl Manager {
 }
 
 /// One worker: pull indices, honor pause/cancel, fetch+store, update counters.
-async fn worker(job: Arc<Job>, urls: Arc<Vec<String>>, root: Arc<std::path::PathBuf>, app: AppHandle) {
+async fn worker(
+    job: Arc<Job>,
+    urls: Arc<Vec<String>>,
+    root: Arc<std::path::PathBuf>,
+    sink: Arc<dyn ProgressSink>,
+) {
     let client = crate::net::client();
     loop {
         if job.cancelled.load(Ordering::Relaxed) {
@@ -272,12 +291,12 @@ async fn worker(job: Arc<Job>, urls: Arc<Vec<String>>, root: Arc<std::path::Path
         match crate::media::store_path(&root, url) {
             Some(p) if p.exists() => {
                 job.skipped.fetch_add(1, Ordering::Relaxed);
-                finish_item(&job, &app);
+                finish_item(&job, &*sink);
                 continue;
             }
             None => {
                 job.failed.fetch_add(1, Ordering::Relaxed);
-                finish_item(&job, &app);
+                finish_item(&job, &*sink);
                 continue;
             }
             _ => {}
@@ -291,7 +310,7 @@ async fn worker(job: Arc<Job>, urls: Arc<Vec<String>>, root: Arc<std::path::Path
                 job.failed.fetch_add(1, Ordering::Relaxed);
             }
         }
-        finish_item(&job, &app);
+        finish_item(&job, &*sink);
     }
 
     // Last worker out finalizes the job.
@@ -302,7 +321,7 @@ async fn worker(job: Arc<Job>, urls: Arc<Vec<String>>, root: Arc<std::path::Path
             Status::Completed
         };
         job.set_status(final_status);
-        emit(&app, &job.snapshot());
+        sink.emit(&job.snapshot());
     }
 }
 
@@ -338,14 +357,14 @@ async fn fetch_to_store(
 }
 
 /// Bump the done counter and emit a throttled progress event.
-fn finish_item(job: &Job, app: &AppHandle) {
+fn finish_item(job: &Job, sink: &dyn ProgressSink) {
     job.done.fetch_add(1, Ordering::Relaxed);
-    maybe_emit(job, app);
+    maybe_emit(job, sink);
 }
 
 /// Emit a progress event if enough time has elapsed since the last one, updating
 /// the instantaneous speed sample. Always cheap; the throttle guards event spam.
-fn maybe_emit(job: &Job, app: &AppHandle) {
+fn maybe_emit(job: &Job, sink: &dyn ProgressSink) {
     let now = Instant::now();
     let mut emit_now = false;
     {
@@ -363,12 +382,8 @@ fn maybe_emit(job: &Job, app: &AppHandle) {
         }
     }
     if emit_now {
-        emit(app, &job.snapshot());
+        sink.emit(&job.snapshot());
     }
-}
-
-fn emit(app: &AppHandle, snap: &Snapshot) {
-    let _ = app.emit(PROGRESS_EVENT, snap);
 }
 
 // ---------------------------------------------------------------------------
@@ -432,7 +447,7 @@ pub fn download_settings_set(
 
 /// Convenience: register the manager in Tauri state (called from setup()).
 pub fn init(app: &AppHandle) {
-    app.manage(Manager::new(app.clone()));
+    app.manage(Manager::new(Arc::new(AppHandleSink(app.clone()))));
 }
 
 #[cfg(test)]
@@ -476,5 +491,88 @@ mod tests {
         job.cancelled.store(true, Ordering::Relaxed);
         job.set_status(Status::Cancelled);
         assert_eq!(job.snapshot().status, Status::Cancelled);
+    }
+
+    // --- Integration tests for the live worker engine (no network) ---------
+    // data_root() falls back to std::env::temp_dir() in tests (init is never
+    // called), so the media store lives under temp_dir()/media. We use URLs
+    // unique to this process so parallel tests don't collide.
+
+    struct NoopSink;
+    impl ProgressSink for NoopSink {
+        fn emit(&self, _: &Snapshot) {}
+    }
+
+    fn unique_url(tag: &str, i: usize) -> String {
+        format!("https://t.invalid/{}/{}/f{}.png", std::process::id(), tag, i)
+    }
+
+    fn precreate(url: &str) {
+        let root = crate::media::media_root(&crate::data_root::data_root());
+        crate::media::write_local(&root, url, b"x").unwrap();
+    }
+
+    async fn wait_terminal(m: &Manager, id: u64) -> Snapshot {
+        for _ in 0..200 {
+            let s = m.status(id).expect("job exists");
+            if matches!(s.status, Status::Completed | Status::Cancelled) {
+                return s;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("job {id} did not reach a terminal state");
+    }
+
+    #[tokio::test]
+    async fn empty_job_finalizes_immediately() {
+        let m = Manager::new(Arc::new(NoopSink));
+        let id = m.start(vec![]);
+        let s = m.status(id).unwrap();
+        assert_eq!(s.status, Status::Completed);
+        assert_eq!(s.total, 0);
+    }
+
+    #[tokio::test]
+    async fn job_completes_skipping_already_cached_files() {
+        let urls: Vec<String> = (0..5).map(|i| unique_url("skip", i)).collect();
+        for u in &urls {
+            precreate(u);
+        }
+        let m = Manager::new(Arc::new(NoopSink));
+        let id = m.start(urls);
+        let s = wait_terminal(&m, id).await;
+        assert_eq!(s.status, Status::Completed);
+        assert_eq!(s.total, 5);
+        assert_eq!(s.skipped, 5, "all pre-cached files should be skipped");
+        assert_eq!(s.success, 0);
+        assert_eq!(s.failed, 0);
+        assert_eq!(s.done, 5);
+    }
+
+    #[tokio::test]
+    async fn unmappable_urls_count_as_failed_without_network() {
+        // "https://x" has only one path segment → store_path None → failed,
+        // exercised without any network access.
+        let m = Manager::new(Arc::new(NoopSink));
+        let id = m.start(vec!["https://x".into(), "not a url".into()]);
+        let s = wait_terminal(&m, id).await;
+        assert_eq!(s.status, Status::Completed);
+        assert_eq!(s.failed, 2);
+        assert_eq!(s.done, 2);
+    }
+
+    #[tokio::test]
+    async fn cancelled_before_start_finishes_cancelled() {
+        // Pre-create many files so there is work; cancel immediately. The job
+        // ends Cancelled (or Completed if it raced to done first) — never stuck.
+        let urls: Vec<String> = (0..200).map(|i| unique_url("cancel", i)).collect();
+        for u in &urls {
+            precreate(u);
+        }
+        let m = Manager::new(Arc::new(NoopSink));
+        let id = m.start(urls);
+        m.cancel(id);
+        let s = wait_terminal(&m, id).await;
+        assert!(matches!(s.status, Status::Cancelled | Status::Completed));
     }
 }
