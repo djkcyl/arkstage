@@ -3,11 +3,29 @@ import { listen } from "@tauri-apps/api/event";
 import { bootEngineInFrame } from "./engineBoot";
 import type { WidgetBundle } from "./engineBoot";
 
-export interface PreProgress {
-  phase: "manifest" | "download";
+export type PredownloadPhase = "manifest" | "download";
+
+/** Unified status across both phases (manifest parsing + media download), so the
+ *  UI shows one continuous progress with a single pause/cancel control. */
+export interface PredownloadStatus {
+  phase: PredownloadPhase;
+  paused: boolean;
   done: number;
   total: number;
-  label: string;
+  /** manifest phase: the story being parsed. */
+  label?: string;
+  /** download phase counters + speed. */
+  success?: number;
+  failed?: number;
+  skipped?: number;
+  bytesPerSec?: number;
+}
+
+/** One control surface that drives whichever phase is currently active. */
+export interface PredownloadSession {
+  pause: () => void;
+  resume: () => void;
+  cancel: () => void;
 }
 
 /** Live snapshot of a managed download job (mirrors download::Snapshot in Rust). */
@@ -77,20 +95,141 @@ export async function captureManifest(
   }
 }
 
-/** Capture+union+dedup the asset manifests for many stories (no media fetched). */
-export async function captureManifestUnion(
+/**
+ * Captured asset-URL manifest for one story, **cached** under `manifest_<title>`
+ * so we don't re-boot the engine (and don't re-fetch the script) on every
+ * predownload. A cache hit needs no network at all — important for offline reuse
+ * and for breakpoint-resume (a re-run skips already-parsed stories instantly).
+ */
+export async function manifestForStory(bundle: WidgetBundle, title: string): Promise<string[]> {
+  const key = `manifest_${title.replace(/\//g, "_")}`;
+  const cached = await invoke<string | null>("load_from_cache", { key });
+  if (cached) return JSON.parse(cached) as string[];
+  const script = await ensureScript(title); // may fetch (online); throws if offline+uncached
+  const urls = await captureManifest(bundle, script, title);
+  await invoke("save_to_cache", { key, data: JSON.stringify(urls) }).catch(() => {});
+  return urls;
+}
+
+/** Frontend pause/cancel gate for the (engine-driven) manifest phase. */
+class PauseGate {
+  private _paused = false;
+  private _cancelled = false;
+  private waiters: Array<() => void> = [];
+  get paused() {
+    return this._paused;
+  }
+  get cancelled() {
+    return this._cancelled;
+  }
+  pause() {
+    this._paused = true;
+  }
+  resume() {
+    this._paused = false;
+    this.flush();
+  }
+  cancel() {
+    this._cancelled = true;
+    this._paused = false;
+    this.flush();
+  }
+  private flush() {
+    const w = this.waiters;
+    this.waiters = [];
+    w.forEach((f) => f());
+  }
+  /** Block while paused; returns as soon as resumed or cancelled. */
+  async wait(): Promise<void> {
+    while (this._paused && !this._cancelled) {
+      await new Promise<void>((r) => this.waiters.push(r));
+    }
+  }
+}
+
+/**
+ * Orchestrate a full predownload: phase 1 parses+caches each story's manifest
+ * (pausable/cancellable, breakpoint-resumable via the cache), phase 2 runs the
+ * managed media download. Both report through one `onStatus` stream and obey one
+ * `onSession` control. Throws on the offline gate (detect with isOfflineError).
+ */
+export async function runPredownload(
   titles: string[],
-  onProgress: (p: PreProgress) => void
-): Promise<string[]> {
+  onStatus: (s: PredownloadStatus) => void,
+  onSession: (s: PredownloadSession) => void
+): Promise<{ cancelled: boolean; manifestCount: number; job: JobSnapshot | null }> {
+  const gate = new PauseGate();
+  let phase: PredownloadPhase = "manifest";
+  let handle: DownloadHandle | null = null;
+  let current: PredownloadStatus = { phase: "manifest", paused: false, done: 0, total: titles.length };
+  const emit = (patch: Partial<PredownloadStatus>) => {
+    current = { ...current, ...patch };
+    onStatus(current);
+  };
+
+  // Route the single control surface to whichever phase is active.
+  onSession({
+    pause: () => {
+      if (phase === "manifest") {
+        gate.pause();
+        emit({ paused: true });
+      } else {
+        handle?.pause();
+      }
+    },
+    resume: () => {
+      if (phase === "manifest") {
+        gate.resume();
+        emit({ paused: false });
+      } else {
+        handle?.resume();
+      }
+    },
+    cancel: () => {
+      gate.cancel();
+      handle?.cancel();
+    },
+  });
+
+  // Phase 1 — manifest (engine-driven, cached).
   const bundle = await loadBundle();
   const union = new Set<string>();
   for (let i = 0; i < titles.length; i++) {
-    onProgress({ phase: "manifest", done: i, total: titles.length, label: titles[i] });
-    const script = await ensureScript(titles[i]); // throws (offline) → caller handles
-    const urls = await captureManifest(bundle, script, titles[i]);
-    urls.forEach((u) => union.add(u));
+    await gate.wait();
+    if (gate.cancelled) return { cancelled: true, manifestCount: union.size, job: null };
+    emit({ phase: "manifest", done: i, total: titles.length, label: titles[i] });
+    try {
+      const urls = await manifestForStory(bundle, titles[i]);
+      urls.forEach((u) => union.add(u));
+    } catch (e) {
+      if (isOfflineError(e)) throw e; // offline → abort; caller shows the hint
+      console.warn("manifest failed for", titles[i], e);
+    }
   }
-  return Array.from(union);
+  emit({ done: titles.length, label: "" });
+
+  // Phase 2 — managed media download.
+  if (gate.cancelled) return { cancelled: true, manifestCount: union.size, job: null };
+  phase = "download";
+  const job = await runDownloadJob(
+    Array.from(union),
+    (snap) =>
+      emit({
+        phase: "download",
+        paused: snap.status === "paused",
+        done: snap.done,
+        total: snap.total,
+        success: snap.success,
+        failed: snap.failed,
+        skipped: snap.skipped,
+        bytesPerSec: snap.bytesPerSec,
+        label: "",
+      }),
+    (h) => {
+      handle = h;
+    }
+  );
+  return { cancelled: job.status === "cancelled", manifestCount: union.size, job };
 }
 
 /**
