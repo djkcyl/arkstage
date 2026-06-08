@@ -33,7 +33,7 @@ class DownloadService : Service() {
     val notif: Notification =
       NotificationCompat.Builder(this, CHANNEL_ID)
         .setContentTitle("PRTS 资源下载")
-        .setContentText("正在下载剧情资源…")
+        .setContentText("正在释放神经递质…")
         .setSmallIcon(android.R.drawable.stat_sys_download)
         .setOngoing(true)
         .setPriority(NotificationCompat.PRIORITY_LOW)
