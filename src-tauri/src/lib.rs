@@ -1,3 +1,4 @@
+mod android_service;
 mod commands;
 mod data_root;
 mod download;

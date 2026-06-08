@@ -165,6 +165,9 @@ pub struct Manager {
     jobs: Mutex<HashMap<u64, Arc<Job>>>,
     next_id: AtomicU64,
     concurrency: AtomicUsize,
+    /// Number of jobs with workers still running; drives the Android foreground
+    /// service (keep-alive) so a backgrounded download isn't frozen/killed.
+    active_jobs: Arc<AtomicUsize>,
 }
 
 impl Manager {
@@ -174,6 +177,7 @@ impl Manager {
             jobs: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             concurrency: AtomicUsize::new(DEFAULT_CONCURRENCY),
+            active_jobs: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -201,12 +205,18 @@ impl Manager {
         let root = crate::media::media_root(&crate::data_root::data_root());
         let root = Arc::new(root);
 
+        // Keep-alive: first active job starts the Android foreground service.
+        if workers > 0 && self.active_jobs.fetch_add(1, Ordering::Relaxed) == 0 {
+            crate::android_service::set_active(true);
+        }
+
         for _ in 0..workers {
             let job = job.clone();
             let urls = urls.clone();
             let root = root.clone();
             let sink = self.sink.clone();
-            tauri::async_runtime::spawn(worker(job, urls, root, sink));
+            let active_jobs = self.active_jobs.clone();
+            tauri::async_runtime::spawn(worker(job, urls, root, sink, active_jobs));
         }
         // Edge case: empty job — no workers, finalize immediately.
         if total == 0 {
@@ -262,6 +272,7 @@ async fn worker(
     urls: Arc<Vec<String>>,
     root: Arc<std::path::PathBuf>,
     sink: Arc<dyn ProgressSink>,
+    active_jobs: Arc<AtomicUsize>,
 ) {
     let client = crate::net::client();
     loop {
@@ -322,6 +333,10 @@ async fn worker(
         };
         job.set_status(final_status);
         sink.emit(&job.snapshot());
+        // Keep-alive: last active job stops the Android foreground service.
+        if active_jobs.fetch_sub(1, Ordering::Relaxed) == 1 {
+            crate::android_service::set_active(false);
+        }
     }
 }
 
