@@ -5,6 +5,8 @@ import StoryBrowserPage from "./pages/StoryBrowserPage";
 import StoryPlayerPage from "./pages/StoryPlayerPage";
 import SettingsPage from "./pages/SettingsPage";
 import DebugConsole from "./components/DebugConsole";
+import DownloadBar from "./components/DownloadBar";
+import { DownloadProvider } from "./lib/DownloadContext";
 import { applyPersistedDownloadSettings } from "./lib/predownload";
 
 export default function App() {
@@ -16,13 +18,17 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/browse" element={<StoryBrowserPage />} />
-        <Route path="/play/:pageTitle" element={<StoryPlayerPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-      </Routes>
-      <DebugConsole />
+      <DownloadProvider>
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/browse" element={<StoryBrowserPage />} />
+          <Route path="/play/:pageTitle" element={<StoryPlayerPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+        </Routes>
+        {/* High-priority, app-wide download progress (hidden inside the reader). */}
+        <DownloadBar />
+        <DebugConsole />
+      </DownloadProvider>
     </BrowserRouter>
   );
 }
