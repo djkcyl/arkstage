@@ -31,10 +31,10 @@ pub async fn download_asset(
             .ok_or_else(|| "Invalid path".to_string());
     }
 
-    let client = reqwest::Client::new();
-    let resp = client
+    // Offline gate: refuse to fetch a missing asset when networking is off.
+    crate::net::ensure_online()?;
+    let resp = crate::net::client()
         .get(&url)
-        .header("User-Agent", "PRTSReader/0.1")
         .send()
         .await
         .map_err(|e| format!("Failed to download asset: {}", e))?;
@@ -97,8 +97,9 @@ pub async fn read_asset_text(
 pub async fn batch_download_assets(
     urls: Vec<String>,
 ) -> Result<BatchDownloadResult, String> {
+    crate::net::ensure_online()?;
     let root = crate::media::media_root(&crate::data_root::data_root());
-    let client = reqwest::Client::new();
+    let client = crate::net::client();
 
     let (mut success, mut failed, mut skipped) = (0u32, 0u32, 0u32);
     let total = urls.len() as u32;

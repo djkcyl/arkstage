@@ -2,11 +2,10 @@ mod commands;
 mod data_root;
 mod media;
 mod models;
-mod net_state;
+mod net;
 mod parser;
 
 use commands::{assets, cache, wiki};
-use std::sync::OnceLock;
 use tauri::Manager;
 
 /// Build a small error response with permissive CORS.
@@ -17,16 +16,6 @@ fn respond_err(responder: tauri::UriSchemeResponder, status: u16, msg: String) {
         .body(msg.into_bytes())
         .unwrap();
     responder.respond(r);
-}
-
-fn http_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-            .build()
-            .unwrap()
-    })
 }
 
 /// Guess content-type from file extension.
@@ -106,7 +95,7 @@ pub fn run() {
             }
 
             // 2) Not cached and offline mode: refuse with a marker the frontend detects.
-            if !net_state::allow_online() {
+            if !net::allow_online() {
                 let r = tauri::http::Response::builder()
                     .status(503)
                     .header("Access-Control-Allow-Origin", "*")
@@ -119,7 +108,7 @@ pub fn run() {
 
             // 3) Online: fetch, persist to store (cache-through), serve.
             tauri::async_runtime::spawn(async move {
-                let client = http_client();
+                let client = net::client();
                 match client
                     .get(&target_url)
                     .header("Referer", "https://prts.wiki/")
@@ -209,8 +198,8 @@ pub fn run() {
             assets::read_asset_text,
             assets::batch_download_assets,
             // Network policy
-            net_state::set_allow_online,
-            net_state::get_allow_online,
+            net::set_allow_online,
+            net::get_allow_online,
             // Resource directory
             data_root::get_resource_dir,
             data_root::set_resource_dir,

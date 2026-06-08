@@ -49,12 +49,12 @@ async fn fetch_page_html(page: &str) -> Result<String, String> {
 /// This is needed for story pages that embed <pre> data blocks,
 /// since the API may not return those correctly.
 async fn fetch_page_raw(page: &str) -> Result<String, String> {
+    // Offline gate: when networking is off, refuse instead of silently fetching.
+    crate::net::ensure_online()?;
     let encoded = urlencoding::encode(page);
     let url = format!("https://prts.wiki/w/{}", encoded);
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = crate::net::client()
         .get(&url)
-        .header("User-Agent", "PRTSReader/0.1")
         .send()
         .await
         .map_err(|e| format!("HTTP request failed: {}", e))?;
