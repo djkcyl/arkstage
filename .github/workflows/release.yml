@@ -80,3 +80,95 @@ jobs:
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
+
+  # Android isn't a tauri-action target, so build the per-ABI APKs separately and
+  # attach them to the same release. Ships arm64-v8a (phones) + x86_64 (emulators/
+  # x86 devices); 32-bit is dropped by design. Signed with the real keystore when
+  # the ANDROID_KEYSTORE_* secrets are set, otherwise debug-signed (still installs).
+  android:
+    name: Release (Android arm64-v8a + x86_64)
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK + platform/build-tools, export NDK env
+        run: |
+          yes | sdkmanager "ndk;27.2.12479018" "platforms;android-35" "build-tools;35.0.0"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      # Same cross-platform native-dep fix as the desktop job (npm/cli#4828).
+      - name: Install dependencies (fresh resolve for cross-platform native deps)
+        shell: bash
+        run: rm -f package-lock.json && npm install --no-audit --no-fund
+
+      # Restore the signing keystore from a secret when present. Unset → the Gradle
+      # release type falls back to debug signing (build.gradle.kts), so the APK
+      # still installs on a device. To enable real signing, set repo secrets:
+      # ANDROID_KEYSTORE_BASE64 (`base64 -w0 prts-release.jks`), ANDROID_KEYSTORE_PASSWORD,
+      # ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.
+      - name: Restore release keystore (optional)
+        id: keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "path=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
+            echo "Release keystore restored — signing with the real key."
+          else
+            echo "No ANDROID_KEYSTORE_BASE64 secret — falling back to debug signing."
+          fi
+
+      - name: Build per-ABI release APKs (arm64-v8a + x86_64)
+        env:
+          # Released builds ship with the debug console enabled by default
+          # (users can turn it off in Settings) — matches the desktop release.
+          VITE_DEBUG_DEFAULT: "true"
+          ANDROID_KEYSTORE_PATH: ${{ steps.keystore.outputs.path }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: npm run tauri android build -- --apk --target aarch64 --target x86_64 --split-per-abi
+
+      - name: Collect and rename APKs
+        run: |
+          out=src-tauri/gen/android/app/build/outputs/apk
+          mkdir -p dist-apk
+          arm=$(find "$out" -path '*arm64*' -name '*release*.apk' | head -1)
+          x86=$(find "$out" -path '*x86_64*' -name '*release*.apk' | head -1)
+          test -n "$arm" || { echo "::error::arm64-v8a APK not found under $out"; find "$out" -name '*.apk'; exit 1; }
+          test -n "$x86" || { echo "::error::x86_64 APK not found under $out"; find "$out" -name '*.apk'; exit 1; }
+          cp "$arm" "dist-apk/prts-reader-${{ github.ref_name }}-android-arm64-v8a.apk"
+          cp "$x86" "dist-apk/prts-reader-${{ github.ref_name }}-android-x86_64.apk"
+          ls -lh dist-apk
+
+      - name: Attach APKs to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: dist-apk/*.apk

@@ -134,14 +134,37 @@ build type falls back to the **debug** signing config, so an unsigned local
 release build still installs on a dev device. Keep the keystore and passwords
 out of the repo (use CI secrets).
 
-## CI (not implemented this phase)
+## CI
 
-A future GitHub Actions job would:
-1. Check out + set up Node, Rust (with the two Android targets), JDK 21.
-2. Install the Android SDK + NDK 27.2.12479018 (e.g. `android-actions/setup-android`).
-3. Restore the signing keystore from a secret; export the `ANDROID_KEYSTORE_*` env.
-4. Run `RELEASE=1 scripts/build-android.sh`.
-5. Upload the APK as an artifact / attach to a GitHub Release.
+Android is built in GitHub Actions alongside the desktop targets, producing
+per-ABI release APKs for **arm64-v8a** (phones) and **x86_64** (emulators / x86
+devices); 32-bit is dropped by design.
+
+- **`.github/workflows/ci.yml`** — `build-android` job: on master pushes (and
+  manual `workflow_dispatch`) builds the two APKs and uploads them as a CI
+  artifact (`prts-reader-android-<sha>`). Debug-signed (no keystore in CI), but
+  installable for testing.
+- **`.github/workflows/release.yml`** — `android` job: on a `v*` tag, builds the
+  two APKs and attaches them to the GitHub Release as
+  `prts-reader-<tag>-android-arm64-v8a.apk` / `…-x86_64.apk`.
+
+Both run `npm run tauri android build -- --apk --target aarch64 --target x86_64
+--split-per-abi` after setting up JDK 21, the Android SDK + NDK 27.2.12479018
+(`android-actions/setup-android` + `sdkmanager`), and the two Rust Android
+targets.
+
+**Release signing in CI** is optional. Set these repository secrets to sign with
+your real keystore (otherwise the build falls back to debug signing):
+
+| Secret | Value |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 prts-release.jks` |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore password |
+| `ANDROID_KEY_ALIAS` | key alias (e.g. `prts`) |
+| `ANDROID_KEY_PASSWORD` | key password |
+
+The release job decodes `ANDROID_KEYSTORE_BASE64` to a file and exports the
+`ANDROID_KEYSTORE_*` env vars that `build.gradle.kts` reads.
 
 This phase intentionally ships only the local script + this doc.
 

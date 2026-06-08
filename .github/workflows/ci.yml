@@ -119,3 +119,56 @@ jobs:
             src-tauri/target/release/bundle/**/*.dmg
             src-tauri/target/release/bundle/**/*.msi
             src-tauri/target/release/bundle/**/*-setup.exe
+
+  # ---- CI build: per-ABI Android APKs (arm64-v8a + x86_64) --------------------
+  # Same gating as the desktop build job. Debug-signed (no keystore in CI) but
+  # installable for testing; the release workflow signs with the real key.
+  build-android:
+    name: Build (Android arm64-v8a + x86_64)
+    needs: check
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK + platform/build-tools, export NDK env
+        run: |
+          yes | sdkmanager "ndk;27.2.12479018" "platforms;android-35" "build-tools;35.0.0"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install dependencies (fresh resolve for cross-platform native deps)
+        shell: bash
+        run: rm -f package-lock.json && npm install --no-audit --no-fund
+
+      - name: Build per-ABI release APKs (arm64-v8a + x86_64)
+        env:
+          VITE_DEBUG_DEFAULT: "true"
+        run: npm run tauri android build -- --apk --target aarch64 --target x86_64 --split-per-abi
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: prts-reader-android-${{ github.sha }}
+          if-no-files-found: warn
+          path: src-tauri/gen/android/app/build/outputs/apk/**/release/*.apk
