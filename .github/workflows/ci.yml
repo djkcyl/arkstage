@@ -40,7 +40,13 @@ jobs:
         with:
           workspaces: "./src-tauri -> target"
 
-      - run: npm ci
+      # `npm install`, not `npm ci`: the committed package-lock.json only carries
+      # full package entries for the linux-x64 native binaries, so `npm ci` (strict
+      # lockfile install) leaves @tauri-apps/cli's platform binary uninstalled on
+      # macOS/Windows → `MODULE_NOT_FOUND` at `tauri build`. `npm install` resolves
+      # the correct platform optional dependency while still honoring the lockfile's
+      # pins for everything else. See npm/cli#4828 (cross-platform optional deps).
+      - run: npm install --no-audit --no-fund
       - name: Run static test suite (tsc + vite build + cargo test/build)
         run: bash scripts/test-static.sh
 
@@ -76,7 +82,13 @@ jobs:
         with:
           workspaces: "./src-tauri -> target"
 
-      - run: npm ci
+      # `npm install`, not `npm ci`: the committed package-lock.json only carries
+      # full package entries for the linux-x64 native binaries, so `npm ci` (strict
+      # lockfile install) leaves @tauri-apps/cli's platform binary uninstalled on
+      # macOS/Windows → `MODULE_NOT_FOUND` at `tauri build`. `npm install` resolves
+      # the correct platform optional dependency while still honoring the lockfile's
+      # pins for everything else. See npm/cli#4828 (cross-platform optional deps).
+      - run: npm install --no-audit --no-fund
       - name: Build the app (native target)
         # CI/script builds ship with the on-screen debug console enabled by default
         # (users can turn it off in Settings). Ordinary local builds default off.
