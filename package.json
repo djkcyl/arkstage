@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "eslint .",
-    "preview": "vite preview",
+    "dev": "vite frontend",
+    "build": "tsc -b frontend && vite build frontend",
+    "lint": "eslint -c frontend/eslint.config.js frontend",
+    "preview": "vite preview frontend",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

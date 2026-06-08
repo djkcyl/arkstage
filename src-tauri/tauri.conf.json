@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.prts.reader",
   "build": {
-    "frontendDist": "../dist",
+    "frontendDist": "../build/dist",
     "devUrl": "http://localhost:5174",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
