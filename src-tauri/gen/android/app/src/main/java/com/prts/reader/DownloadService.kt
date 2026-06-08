@@ -37,6 +37,11 @@ class DownloadService : Service() {
         .setSmallIcon(android.R.drawable.stat_sys_download)
         .setOngoing(true)
         .setPriority(NotificationCompat.PRIORITY_LOW)
+        // Android 12+ otherwise defers the foreground-service notification (and
+        // suppresses it entirely while the app is in the foreground), so a quick
+        // download finishes before it ever appears. FOREGROUND_SERVICE_IMMEDIATE
+        // forces it to show right away.
+        .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
         .build()
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

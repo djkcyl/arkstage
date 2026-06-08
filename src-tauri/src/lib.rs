@@ -202,12 +202,15 @@ pub fn run() {
             assets::read_asset_text,
             // Managed bulk downloads
             download::download_start,
+            download::download_add,
+            download::download_close,
             download::download_pause,
             download::download_resume,
             download::download_cancel,
             download::download_status,
             download::download_settings_get,
             download::download_settings_set,
+            download::set_download_keepalive,
             // Network policy
             net::set_allow_online,
             net::get_allow_online,

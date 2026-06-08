@@ -3,25 +3,27 @@ import { listen } from "@tauri-apps/api/event";
 import { bootEngineInFrame } from "./engineBoot";
 import type { WidgetBundle } from "./engineBoot";
 
-export type PredownloadPhase = "manifest" | "download";
-
-/** Unified status across both phases (manifest parsing + media download), so the
- *  UI shows one continuous progress with a single pause/cancel control. */
+/**
+ * Predownload status. Indexing (manifest) and downloading run CONCURRENTLY now
+ * (each parsed story's assets are streamed to the downloader immediately), so
+ * this carries both phases' progress at once — the UI shows two progress bars.
+ */
 export interface PredownloadStatus {
-  phase: PredownloadPhase;
   paused: boolean;
+  // 索引 (manifest) phase
+  manifestDone: number;
+  manifestTotal: number;
+  manifestActive: boolean; // still indexing stories
+  // 下载 (download) phase
   done: number;
-  total: number;
-  /** manifest phase: the story being parsed. */
-  label?: string;
-  /** download phase counters + speed. */
-  success?: number;
-  failed?: number;
-  skipped?: number;
-  bytesPerSec?: number;
+  total: number; // known assets so far (grows while indexing)
+  success: number;
+  failed: number;
+  skipped: number;
+  bytesPerSec: number;
 }
 
-/** One control surface that drives whichever phase is currently active. */
+/** One control surface that pauses/cancels both phases together. */
 export interface PredownloadSession {
   pause: () => void;
   resume: () => void;
@@ -39,14 +41,6 @@ export interface JobSnapshot {
   skipped: number;
   bytes: number;
   bytesPerSec: number;
-}
-
-/** Controls for an in-flight download job. */
-export interface DownloadHandle {
-  jobId: number;
-  pause: () => Promise<void>;
-  resume: () => Promise<void>;
-  cancel: () => Promise<void>;
 }
 
 /** True when an error string came from the backend offline gate. */
@@ -147,136 +141,112 @@ class PauseGate {
   }
 }
 
+const ZERO_JOB: JobSnapshot = {
+  id: 0,
+  status: "running",
+  total: 0,
+  done: 0,
+  success: 0,
+  failed: 0,
+  skipped: 0,
+  bytes: 0,
+  bytesPerSec: 0,
+};
+
 /**
- * Orchestrate a full predownload: phase 1 parses+caches each story's manifest
- * (pausable/cancellable, breakpoint-resumable via the cache), phase 2 runs the
- * managed media download. Both report through one `onStatus` stream and obey one
- * `onSession` control. Throws on the offline gate (detect with isOfflineError).
+ * Orchestrate a pipelined predownload: open a streaming download job, then parse
+ * each story's manifest and immediately stream its (deduped, cached) asset URLs
+ * to the job so indexing and downloading run CONCURRENTLY. Reports both phases'
+ * progress via `onStatus` (two bars) and exposes one pause/cancel `onSession`.
+ *
+ * Also starts the Android keep-alive foreground service up-front (while the app
+ * is in the foreground — Android 12+ forbids starting it from the background) and
+ * stops it when done. Throws on the offline gate (detect with isOfflineError).
  */
 export async function runPredownload(
   titles: string[],
   onStatus: (s: PredownloadStatus) => void,
   onSession: (s: PredownloadSession) => void
-): Promise<{ cancelled: boolean; manifestCount: number; job: JobSnapshot | null }> {
+): Promise<{ cancelled: boolean; job: JobSnapshot | null }> {
+  await invoke("set_download_keepalive", { active: true }).catch(() => {});
+
   const gate = new PauseGate();
-  let phase: PredownloadPhase = "manifest";
-  let handle: DownloadHandle | null = null;
-  let current: PredownloadStatus = { phase: "manifest", paused: false, done: 0, total: titles.length };
-  const emit = (patch: Partial<PredownloadStatus>) => {
-    current = { ...current, ...patch };
-    onStatus(current);
-  };
-
-  // Route the single control surface to whichever phase is active.
-  onSession({
-    pause: () => {
-      if (phase === "manifest") {
-        gate.pause();
-        emit({ paused: true });
-      } else {
-        handle?.pause();
-      }
-    },
-    resume: () => {
-      if (phase === "manifest") {
-        gate.resume();
-        emit({ paused: false });
-      } else {
-        handle?.resume();
-      }
-    },
-    cancel: () => {
-      gate.cancel();
-      handle?.cancel();
-    },
-  });
-
-  // Phase 1 — manifest (engine-driven, cached).
-  const bundle = await loadBundle();
-  const union = new Set<string>();
-  for (let i = 0; i < titles.length; i++) {
-    await gate.wait();
-    if (gate.cancelled) return { cancelled: true, manifestCount: union.size, job: null };
-    emit({ phase: "manifest", done: i, total: titles.length, label: titles[i] });
-    try {
-      const urls = await manifestForStory(bundle, titles[i]);
-      urls.forEach((u) => union.add(u));
-    } catch (e) {
-      if (isOfflineError(e)) throw e; // offline → abort; caller shows the hint
-      console.warn("manifest failed for", titles[i], e);
-    }
-  }
-  emit({ done: titles.length, label: "" });
-
-  // Phase 2 — managed media download.
-  if (gate.cancelled) return { cancelled: true, manifestCount: union.size, job: null };
-  phase = "download";
-  const job = await runDownloadJob(
-    Array.from(union),
-    (snap) =>
-      emit({
-        phase: "download",
-        paused: snap.status === "paused",
-        done: snap.done,
-        total: snap.total,
-        success: snap.success,
-        failed: snap.failed,
-        skipped: snap.skipped,
-        bytesPerSec: snap.bytesPerSec,
-        label: "",
-      }),
-    (h) => {
-      handle = h;
-    }
-  );
-  return { cancelled: job.status === "cancelled", manifestCount: union.size, job };
-}
-
-/**
- * Start a managed download job over `urls` and resolve when it finishes
- * (completed or cancelled). Live snapshots arrive via `onSnapshot`; the job's
- * control handle (pause/resume/cancel) is delivered via `onHandle`. Throws if the
- * backend refuses to start (e.g. offline) — detect with {@link isOfflineError}.
- */
-export async function runDownloadJob(
-  urls: string[],
-  onSnapshot: (s: JobSnapshot) => void,
-  onHandle: (h: DownloadHandle) => void
-): Promise<JobSnapshot> {
-  const jobId = await invoke<number>("download_start", { urls });
-  onHandle({
-    jobId,
-    pause: () => invoke("download_pause", { jobId }),
-    resume: () => invoke("download_resume", { jobId }),
-    cancel: () => invoke("download_cancel", { jobId }),
-  });
-
-  return await new Promise<JobSnapshot>((resolve) => {
-    let unlisten = () => {};
-    let settled = false;
-    const finish = (s: JobSnapshot) => {
-      if (settled) return;
-      settled = true;
-      unlisten();
-      resolve(s);
-    };
-    const isTerminal = (s: JobSnapshot) => s.status === "completed" || s.status === "cancelled";
-    listen<JobSnapshot>("download://progress", (e) => {
-      if (e.payload.id !== jobId) return;
-      onSnapshot(e.payload);
-      if (isTerminal(e.payload)) finish(e.payload);
-    }).then((un) => {
-      unlisten = un;
-      // Race guard: a tiny / all-skipped job can finish before the listener
-      // attaches, so poll its status once after subscribing.
-      invoke<JobSnapshot | null>("download_status", { jobId }).then((s) => {
-        if (s) {
-          onSnapshot(s);
-          if (isTerminal(s)) finish(s);
-        }
-      });
+  let manifestDone = 0;
+  const manifestTotal = titles.length;
+  let manifestActive = true;
+  let paused = false;
+  let dl: JobSnapshot = { ...ZERO_JOB };
+  const emit = () =>
+    onStatus({
+      paused,
+      manifestDone,
+      manifestTotal,
+      manifestActive,
+      done: dl.done,
+      total: dl.total,
+      success: dl.success,
+      failed: dl.failed,
+      skipped: dl.skipped,
+      bytesPerSec: dl.bytesPerSec,
     });
-  });
+
+  try {
+    const bundle = await loadBundle();
+    // Open a streaming job (foreground → keep-alive start is allowed).
+    const jobId = await invoke<number>("download_start", { urls: [] });
+
+    onSession({
+      pause: () => { paused = true; gate.pause(); invoke("download_pause", { jobId }); emit(); },
+      resume: () => { paused = false; gate.resume(); invoke("download_resume", { jobId }); emit(); },
+      cancel: () => { gate.cancel(); invoke("download_cancel", { jobId }); },
+    });
+
+    // Resolve when the job reaches a terminal status (driven by events + a poll backstop).
+    let resolveDone: (s: JobSnapshot) => void = () => {};
+    const done = new Promise<JobSnapshot>((res) => { resolveDone = res; });
+    const isTerminal = (s: JobSnapshot) => s.status === "completed" || s.status === "cancelled";
+    const unlisten = await listen<JobSnapshot>("download://progress", (e) => {
+      if (e.payload.id !== jobId) return;
+      dl = e.payload;
+      if (e.payload.status === "paused") paused = true;
+      emit();
+      if (isTerminal(e.payload)) resolveDone(e.payload);
+    });
+    emit();
+
+    // Index loop — capture each manifest and stream its URLs into the live job.
+    let cancelled = false;
+    for (let i = 0; i < titles.length; i++) {
+      await gate.wait();
+      if (gate.cancelled) { cancelled = true; break; }
+      manifestDone = i;
+      emit();
+      try {
+        const urls = await manifestForStory(bundle, titles[i]);
+        await invoke("download_add", { jobId, urls });
+      } catch (e) {
+        if (isOfflineError(e)) { unlisten(); throw e; }
+        console.warn("manifest failed for", titles[i], e);
+      }
+    }
+    manifestDone = titles.length;
+    manifestActive = false;
+    emit();
+
+    // No more URLs coming — let the queue drain and the job finish.
+    await invoke("download_close", { jobId });
+    const poll = setInterval(() => {
+      invoke<JobSnapshot | null>("download_status", { jobId }).then((s) => {
+        if (s && isTerminal(s)) resolveDone(s);
+      });
+    }, 400);
+    const job = await done;
+    clearInterval(poll);
+    unlisten();
+    return { cancelled: cancelled || job.status === "cancelled", job };
+  } finally {
+    await invoke("set_download_keepalive", { active: false }).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------------------

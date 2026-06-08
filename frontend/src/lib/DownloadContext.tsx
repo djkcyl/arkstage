@@ -43,7 +43,18 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   const start = useCallback(async (titles: string[]) => {
     if (runningRef.current || titles.length === 0) return;
     runningRef.current = true;
-    setStatus({ phase: "manifest", paused: false, done: 0, total: titles.length });
+    setStatus({
+      paused: false,
+      manifestDone: 0,
+      manifestTotal: titles.length,
+      manifestActive: true,
+      done: 0,
+      total: 0,
+      success: 0,
+      failed: 0,
+      skipped: 0,
+      bytesPerSec: 0,
+    });
     setSession(null);
     try {
       const { cancelled, job } = await runPredownload(titles, setStatus, setSession);
