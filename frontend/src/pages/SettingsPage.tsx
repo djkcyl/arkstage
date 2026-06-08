@@ -4,6 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { isDebugConsoleEnabled, setDebugPref, debugBuildDefault } from "../lib/debugSettings";
 import { isAndroid } from "../lib/platform";
+import {
+  getDownloadSettings,
+  setDownloadSettings,
+  isOfflineError,
+} from "../lib/predownload";
 
 interface CacheStatus {
   story_index_cached: boolean;
@@ -30,6 +35,9 @@ export default function SettingsPage() {
   const [allowOnline, setAllowOnline] = useState(true);
   const [resDir, setResDir] = useState<ResourceDirInfo | null>(null);
   const [debugConsole, setDebugConsole] = useState(isDebugConsoleEnabled());
+  // Download tuning: concurrency + bandwidth limit (shown in KB/s; 0 = unlimited).
+  const [concurrency, setConcurrency] = useState(4);
+  const [rateLimitKbps, setRateLimitKbps] = useState(0);
 
   useEffect(() => {
     const saved = localStorage.getItem("prts-nickname");
@@ -37,7 +45,26 @@ export default function SettingsPage() {
     refreshCacheStatus();
     invoke<boolean>("get_allow_online").then(setAllowOnline).catch(() => {});
     invoke<ResourceDirInfo>("get_resource_dir").then(setResDir).catch(() => {});
+    getDownloadSettings()
+      .then((s) => {
+        setConcurrency(s.concurrency);
+        setRateLimitKbps(Math.round(s.rateLimitBps / 1024));
+      })
+      .catch(() => {});
   }, []);
+
+  const saveDownloadSettings = async (nextConcurrency: number, nextKbps: number) => {
+    const c = Math.max(1, Math.min(32, Math.round(nextConcurrency) || 1));
+    const kbps = Math.max(0, Math.round(nextKbps) || 0);
+    setConcurrency(c);
+    setRateLimitKbps(kbps);
+    try {
+      await setDownloadSettings({ concurrency: c, rateLimitBps: kbps * 1024 });
+      showMsg(kbps === 0 ? `已保存：并发 ${c}，不限速` : `已保存：并发 ${c}，限速 ${kbps} KB/s`);
+    } catch (e) {
+      showMsg(`保存失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
+    }
+  };
 
   const chooseResourceDir = async () => {
     try {
@@ -86,7 +113,12 @@ export default function SettingsPage() {
       showMsg("全局数据已更新");
       refreshCacheStatus();
     } catch (e) {
-      showMsg(`错误: ${e}`, 5000);
+      showMsg(
+        isOfflineError(e)
+          ? "当前为离线模式，无法联网获取。请先在上方「联网策略」开启联网。"
+          : `错误: ${e}`,
+        5000
+      );
     } finally {
       setBusy(false);
     }
@@ -137,7 +169,12 @@ export default function SettingsPage() {
       showMsg("引擎代码及依赖已全部缓存");
       refreshCacheStatus();
     } catch (e) {
-      showMsg(`错误: ${e}`, 5000);
+      showMsg(
+        isOfflineError(e)
+          ? "当前为离线模式，无法联网获取。请先在上方「联网策略」开启联网。"
+          : `错误: ${e}`,
+        5000
+      );
     } finally {
       setBusy(false);
     }
@@ -155,7 +192,12 @@ export default function SettingsPage() {
       showMsg("剧情目录已缓存");
       refreshCacheStatus();
     } catch (e) {
-      showMsg(`错误: ${e}`, 5000);
+      showMsg(
+        isOfflineError(e)
+          ? "当前为离线模式，无法联网获取。请先在上方「联网策略」开启联网。"
+          : `错误: ${e}`,
+        5000
+      );
     } finally {
       setBusy(false);
     }
@@ -168,7 +210,12 @@ export default function SettingsPage() {
       showMsg("缓存已清除");
       refreshCacheStatus();
     } catch (e) {
-      showMsg(`错误: ${e}`, 5000);
+      showMsg(
+        isOfflineError(e)
+          ? "当前为离线模式，无法联网获取。请先在上方「联网策略」开启联网。"
+          : `错误: ${e}`,
+        5000
+      );
     }
   };
 
@@ -214,6 +261,38 @@ export default function SettingsPage() {
           <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
             {allowOnline ? "缺失资源将自动从 PRTS 拉取并缓存" : "仅播放已缓存资源，缺失时提示获取"}
           </span>
+        </div>
+      </div>
+
+      {/* Download tuning */}
+      <div className="setting-group">
+        <label>下载设置（预下载的并发与限速）</label>
+        <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span style={{ fontSize: "13px" }}>并发数</span>
+            <input
+              type="number"
+              min={1}
+              max={32}
+              value={concurrency}
+              style={{ width: "72px" }}
+              onChange={(e) => setConcurrency(Number(e.target.value))}
+              onBlur={() => saveDownloadSettings(concurrency, rateLimitKbps)}
+            />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span style={{ fontSize: "13px" }}>限速 (KB/s)</span>
+            <input
+              type="number"
+              min={0}
+              step={64}
+              value={rateLimitKbps}
+              style={{ width: "96px" }}
+              onChange={(e) => setRateLimitKbps(Number(e.target.value))}
+              onBlur={() => saveDownloadSettings(concurrency, rateLimitKbps)}
+            />
+            <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>0 = 不限速</span>
+          </div>
         </div>
       </div>
 

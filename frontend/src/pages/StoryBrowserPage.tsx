@@ -2,8 +2,15 @@ import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useStoryIndex } from "../hooks/useStoryIndex";
-import { predownloadScope } from "../lib/predownload";
-import type { PreProgress } from "../lib/predownload";
+import { captureManifestUnion, runDownloadJob, isOfflineError } from "../lib/predownload";
+import type { PreProgress, JobSnapshot, DownloadHandle } from "../lib/predownload";
+
+/** Human-readable transfer speed, e.g. "1.2 MB/s". */
+function fmtSpeed(bps: number): string {
+  if (bps < 1024) return `${bps} B/s`;
+  if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(0)} KB/s`;
+  return `${(bps / 1024 / 1024).toFixed(1)} MB/s`;
+}
 
 export default function StoryBrowserPage() {
   const { index, loading, error, refresh } = useStoryIndex();
@@ -11,20 +18,43 @@ export default function StoryBrowserPage() {
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
   const [cachedStories, setCachedStories] = useState<Set<string>>(new Set());
   const [pre, setPre] = useState<PreProgress | null>(null);
+  const [snap, setSnap] = useState<JobSnapshot | null>(null);
+  const [handle, setHandle] = useState<DownloadHandle | null>(null);
   const navigate = useNavigate();
 
+  const busy = pre !== null || snap !== null;
+
   const runPredownload = async (titles: string[]) => {
-    if (pre) return; // already running
+    if (busy) return; // already running
     setPre({ phase: "manifest", done: 0, total: titles.length, label: "" });
+    setSnap(null);
+    setHandle(null);
     try {
-      const { assets, result } = await predownloadScope(titles, setPre);
-      alert(`范围资源 ${assets} 个：成功${result.success} 跳过${result.skipped} 失败${result.failed}`);
+      const urls = await captureManifestUnion(titles, setPre);
+      setPre(null);
+      const final = await runDownloadJob(urls, setSnap, setHandle);
+      const verb = final.status === "cancelled" ? "已取消" : "完成";
+      alert(
+        `预下载${verb}：资源 ${final.total} 个，成功 ${final.success}，跳过 ${final.skipped}，失败 ${final.failed}`
+      );
       invoke<string[]>("list_cached_stories").then((list) => setCachedStories(new Set(list))).catch(() => {});
     } catch (e) {
-      alert(`预下载失败: ${e instanceof Error ? e.message : String(e)}`);
+      alert(
+        isOfflineError(e)
+          ? "当前为离线模式，无法下载。请先在「设置 → 联网策略」中开启联网。"
+          : `预下载失败: ${e instanceof Error ? e.message : String(e)}`
+      );
     } finally {
       setPre(null);
+      setSnap(null);
+      setHandle(null);
     }
+  };
+
+  const togglePause = async () => {
+    if (!handle || !snap) return;
+    if (snap.status === "paused") await handle.resume();
+    else await handle.pause();
   };
 
   // Load cached story list
@@ -117,7 +147,7 @@ export default function StoryBrowserPage() {
               <button
                 className="nav-btn"
                 style={{ marginLeft: "12px", fontSize: "12px" }}
-                disabled={!!pre}
+                disabled={busy}
                 onClick={(e) => {
                   e.stopPropagation();
                   runPredownload(cat.chapters.flatMap((ch) => ch.stories.map((s) => s.page_title)));
@@ -137,7 +167,7 @@ export default function StoryBrowserPage() {
                       <button
                         className="nav-btn"
                         style={{ marginLeft: "10px", fontSize: "11px" }}
-                        disabled={!!pre}
+                        disabled={busy}
                         onClick={() => runPredownload(ch.stories.map((s) => s.page_title))}
                         title="预下载本章资源"
                       >
@@ -168,7 +198,7 @@ export default function StoryBrowserPage() {
         )}
       </div>
 
-      {pre && (
+      {(pre || snap) && (
         <div
           style={{
             position: "fixed",
@@ -180,11 +210,53 @@ export default function StoryBrowserPage() {
             color: "#f4c430",
             fontSize: "13px",
             zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            gap: "12px",
           }}
         >
-          {pre.phase === "manifest"
-            ? `解析资源清单 ${pre.done}/${pre.total} ${pre.label}`
-            : `下载资源 ${pre.total} 个…`}
+          {pre ? (
+            <span>解析资源清单 {pre.done}/{pre.total} {pre.label}</span>
+          ) : snap ? (
+            <>
+              <span style={{ flex: "0 0 auto" }}>
+                {snap.status === "paused" ? "已暂停" : "下载中"} {snap.done}/{snap.total}
+                {snap.skipped > 0 ? `（跳过 ${snap.skipped}）` : ""}
+                {snap.failed > 0 ? `（失败 ${snap.failed}）` : ""}
+              </span>
+              <div
+                style={{
+                  flex: "1 1 auto",
+                  height: "6px",
+                  background: "rgba(255,255,255,0.15)",
+                  borderRadius: "3px",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    width: `${snap.total ? (snap.done / snap.total) * 100 : 0}%`,
+                    height: "100%",
+                    background: "#f4c430",
+                    transition: "width 0.2s",
+                  }}
+                />
+              </div>
+              <span style={{ flex: "0 0 auto", minWidth: "72px", textAlign: "right" }}>
+                {snap.status === "paused" ? "—" : fmtSpeed(snap.bytesPerSec)}
+              </span>
+              <button className="nav-btn" style={{ fontSize: "12px" }} onClick={togglePause}>
+                {snap.status === "paused" ? "继续" : "暂停"}
+              </button>
+              <button
+                className="nav-btn"
+                style={{ fontSize: "12px" }}
+                onClick={() => handle?.cancel()}
+              >
+                取消
+              </button>
+            </>
+          ) : null}
         </div>
       )}
     </div>

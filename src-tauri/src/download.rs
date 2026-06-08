@@ -72,7 +72,6 @@ struct Job {
     cancelled: AtomicBool,
     active_workers: AtomicUsize,
     next_index: AtomicUsize,
-    started: Instant,
     notify: tokio::sync::Notify,
     speed: Mutex<Speed>,
 }
@@ -116,7 +115,6 @@ impl Job {
             cancelled: AtomicBool::new(false),
             active_workers: AtomicUsize::new(0),
             next_index: AtomicUsize::new(0),
-            started: now,
             notify: tokio::sync::Notify::new(),
             speed: Mutex::new(Speed {
                 last_at: now,
@@ -257,6 +255,11 @@ async fn worker(job: Arc<Job>, urls: Arc<Vec<String>>, root: Arc<std::path::Path
         if job.cancelled.load(Ordering::Relaxed) {
             break;
         }
+        // Offline toggled mid-job: stop pulling new items (cached reads only).
+        if !crate::net::allow_online() {
+            job.cancelled.store(true, Ordering::Relaxed);
+            break;
+        }
 
         let i = job.next_index.fetch_add(1, Ordering::Relaxed);
         if i >= urls.len() {
@@ -379,8 +382,13 @@ pub struct DownloadSettings {
 }
 
 #[tauri::command]
-pub fn download_start(urls: Vec<String>, state: tauri::State<'_, Manager>) -> u64 {
-    state.start(urls)
+pub fn download_start(
+    urls: Vec<String>,
+    state: tauri::State<'_, Manager>,
+) -> Result<u64, String> {
+    // Offline gate: don't even start a bulk download when networking is off.
+    crate::net::ensure_online()?;
+    Ok(state.start(urls))
 }
 
 #[tauri::command]
