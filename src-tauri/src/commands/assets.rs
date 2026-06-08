@@ -31,10 +31,10 @@ pub async fn download_asset(
             .ok_or_else(|| "Invalid path".to_string());
     }
 
-    let client = reqwest::Client::new();
-    let resp = client
+    // Offline gate: refuse to fetch a missing asset when networking is off.
+    crate::net::ensure_online()?;
+    let resp = crate::net::client()
         .get(&url)
-        .header("User-Agent", "PRTSReader/0.1")
         .send()
         .await
         .map_err(|e| format!("Failed to download asset: {}", e))?;
@@ -89,62 +89,6 @@ pub async fn read_asset_text(
         Ok(None)
     }
 }
-
-/// Download a list of absolute CDN URLs into the content-addressed media store
-/// (`$APPDATA/media/{host}/{path}`). Already-present files are skipped (cross-story
-/// dedup). Sends a Referer header to avoid CDN 403s.
-#[tauri::command]
-pub async fn batch_download_assets(
-    urls: Vec<String>,
-) -> Result<BatchDownloadResult, String> {
-    let root = crate::media::media_root(&crate::data_root::data_root());
-    let client = reqwest::Client::new();
-
-    let (mut success, mut failed, mut skipped) = (0u32, 0u32, 0u32);
-    let total = urls.len() as u32;
-
-    for url in urls {
-        match crate::media::store_path(&root, &url) {
-            Some(p) if p.exists() => {
-                skipped += 1;
-                continue;
-            }
-            None => {
-                failed += 1;
-                continue;
-            }
-            _ => {}
-        }
-
-        match client
-            .get(&url)
-            .header("Referer", "https://prts.wiki/")
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
-                Ok(bytes) => match crate::media::write_local(&root, &url, &bytes) {
-                    Ok(()) => success += 1,
-                    Err(_) => failed += 1,
-                },
-                Err(_) => failed += 1,
-            },
-            _ => failed += 1,
-        }
-    }
-
-    Ok(BatchDownloadResult {
-        total,
-        success,
-        failed,
-        skipped,
-    })
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct BatchDownloadResult {
-    pub total: u32,
-    pub success: u32,
-    pub failed: u32,
-    pub skipped: u32,
-}
+// Bulk media downloading moved to the managed `download` module (job model with
+// concurrency, pause/resume, cancel, progress events, bandwidth limit). See
+// `download_start` and friends; the old `batch_download_assets` was removed.
