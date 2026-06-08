@@ -114,7 +114,6 @@ jobs:
           name: prts-reader-${{ matrix.platform }}-${{ github.sha }}
           if-no-files-found: warn
           path: |
-            src-tauri/target/release/bundle/**/*.AppImage
             src-tauri/target/release/bundle/**/*.deb
             src-tauri/target/release/bundle/**/*.rpm
             src-tauri/target/release/bundle/**/*.dmg
