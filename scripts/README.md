@@ -1,16 +1,38 @@
-# Test scripts
+# Scripts
+
+## Test scripts
 
 | Script | What it does | Needs network | Needs display |
 |--------|--------------|:-------------:|:-------------:|
-| `test-static.sh` | `cargo test` + `cargo build` + `tsc -b` + `vite build` | no | no |
+| `test-static.sh` | `cargo test` + `cargo build` + `tsc -b frontend` + `vite build frontend` | no | no |
 | `test-e2e.sh` | launches the real app under headless **Xvfb**, drives the UI with **xdotool**, asserts on real side-effects | **yes** (prts.wiki) | Xvfb |
 | `run-tests.sh` | runs static then e2e | yes | Xvfb |
-| `build-windows.sh` | cross-build a Windows **NSIS** installer (`*-setup.exe`) from Linux via MinGW | yes (first run) | no |
 
 ```bash
 scripts/test-static.sh     # fast, offline
 scripts/test-e2e.sh        # full app smoke test (headless)
 scripts/run-tests.sh       # everything
+```
+
+## Build & cleanup scripts
+
+All build products land under **`build/artifacts/`** (gitignored). Each build
+script cleans scratch/junk before and after, and deletes any stale same-type
+artifact in `build/artifacts/` before building.
+
+| Script | What it does | Needs network | Needs display |
+|--------|--------------|:-------------:|:-------------:|
+| `build-android.sh` | build a sideloadable Android APK → `build/artifacts/` (ABIs via `ABI=`, `RELEASE=1` for release signing) | yes (first run) | no |
+| `build-windows.sh` | cross-build a Windows **NSIS** installer (`*-setup.exe`) from Linux via MinGW → `build/artifacts/` | yes (first run) | no |
+| `build-windows-portable.sh` | cross-build a portable Windows folder + `.zip` → `build/artifacts/` | yes (first run) | no |
+| `clean.sh` | remove build outputs and/or scratch junk; never deletes git-tracked files | no | no |
+| `precommit-clean.sh` | thin wrapper around `clean.sh` (wire as a git pre-commit hook) | no | no |
+
+```bash
+scripts/clean.sh             # clean BOTH build outputs and junk (default)
+scripts/clean.sh --build     # only build outputs (build/, dist, gen)
+scripts/clean.sh --junk      # only scratch / OS / editor junk
+scripts/clean.sh --dry-run   # show what would be removed (combine w/ above)
 ```
 
 ## What `test-e2e.sh` proves

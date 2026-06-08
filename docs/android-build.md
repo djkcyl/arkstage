@@ -32,8 +32,9 @@ ABI=x86_64 scripts/build-android.sh      # emulator-only, faster
 ABI=aarch64 scripts/build-android.sh     # real-device-only
 ```
 
-The finished APK is copied to the **project root** (e.g.
-`app-universal-debug.apk`) and is gitignored. The script sets
+The finished APK is copied to **`build/artifacts/`** (e.g.
+`app-universal-debug.apk`) and is gitignored. The script removes any stale APK
+there before building, and cleans scratch/junk before and after. It sets
 `VITE_DEBUG_DEFAULT=true`, so script-built APKs ship with the on-screen debug
 console enabled (toggle it off in Settings) — consistent with the desktop
 `build-windows*.sh` scripts.
@@ -64,7 +65,7 @@ adb wait-for-device
 until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done
 
 # Install + launch
-adb install -r app-universal-debug.apk
+adb install -r build/artifacts/app-universal-debug.apk
 adb shell am start -n com.prts.reader/.MainActivity
 
 # Observe
@@ -86,7 +87,7 @@ physical device (below). The APK + a device install is the source of truth.
 Enable Developer Options → USB debugging, connect, then:
 
 ```bash
-adb install -r app-universal-debug.apk
+adb install -r build/artifacts/app-universal-debug.apk
 adb shell am start -n com.prts.reader/.MainActivity
 ```
 

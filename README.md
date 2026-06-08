@@ -152,7 +152,7 @@ scripts/build-windows.sh
 #   npm run tauri:build -- --target x86_64-pc-windows-gnu   # 注意：不要带 --bundles
 ```
 
-脚本会把成品安装包 `prts-reader_<版本>_x64-setup.exe` **直接放到项目根目录**，并在构建后清除庞大的交叉编译中间产物（想保留以加速重复构建可设 `KEEP_TARGET=1`）。根目录下的安装包已在 `.gitignore` 中忽略。
+脚本会把成品安装包 `prts-reader_<版本>_x64-setup.exe` 放到 **`build/artifacts/`**，并在构建后清除庞大的交叉编译中间产物（想保留以加速重复构建可设 `KEEP_TARGET=1`）。整个 `build/` 已在 `.gitignore` 中忽略。
 
 要点与限制：
 
@@ -167,10 +167,11 @@ scripts/build-windows.sh
 
 ```
 prts-reader/
-├─ src/                      # React 前端
-│  ├─ pages/                 # 首页 / 浏览 / 播放器 / 设置
-│  ├─ lib/                   # engineBoot(引擎启动) · predownload(清单+预下载) · proxy(CDN 改写)
-│  └─ hooks/
+├─ frontend/                 # React 前端（index.html / vite·ts·eslint 配置）
+│  └─ src/
+│     ├─ pages/              # 首页 / 浏览 / 播放器 / 设置
+│     ├─ lib/                # engineBoot(引擎启动) · predownload(清单+预下载) · proxy(CDN 改写)
+│     └─ hooks/
 ├─ src-tauri/                # Tauri / Rust 后端
 │  └─ src/
 │     ├─ commands/           # wiki(抓取) · cache(缓存) · assets(下载)
@@ -178,7 +179,9 @@ prts-reader/
 │     ├─ media.rs            # 内容寻址媒体仓库
 │     ├─ net_state.rs        # 联网开关
 │     └─ lib.rs              # prts-cdn:// 协议 + 命令注册
-├─ scripts/                  # 测试脚本（见下）
+├─ scripts/                  # 构建 / 测试 / 清理脚本（见下）
+├─ docs/                     # 设计文档、构建指南、reference/（gitignore）
+├─ build/                    # 构建产物：dist/（前端 bundle）+ artifacts/（安装包/APK）
 └─ .github/workflows/        # CI 与 Release 工作流
 ```
 
