@@ -56,12 +56,11 @@ jobs:
         with:
           workspaces: "./src-tauri -> target"
 
-      # `npm install`, not `npm ci`: package-lock.json only carries full entries for
-      # the linux-x64 native binaries, so `npm ci` leaves @tauri-apps/cli's platform
-      # binary uninstalled on macOS/Windows → MODULE_NOT_FOUND at `tauri build`.
-      # `npm install` resolves the right platform optional dep, lockfile still pins
-      # the rest. See npm/cli#4828.
-      - run: npm install --no-audit --no-fund
+      # Cross-platform native deps (npm/cli#4828): package-lock.json (linux-x64) only
+      # carries linux-x64 native binaries, so npm ci / npm install both leave the
+      # @tauri-apps/cli platform binary missing on macOS/Windows → "Cannot find native
+      # binding" at `tauri build`. Drop the incomplete lockfile and resolve fresh.
+      - run: rm -f package-lock.json && npm install --no-audit --no-fund
 
       - name: Build and publish to the release
         uses: tauri-apps/tauri-action@v0
