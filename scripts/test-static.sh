@@ -11,7 +11,7 @@ echo "==> [2/4] cargo build (backend compiles)"
 cargo build --manifest-path src-tauri/Cargo.toml
 
 echo "==> [3/4] tsc -b (frontend type-check)"
-npx tsc -b
+npx tsc -b frontend
 
 echo "==> [4/4] vite build (frontend bundles)"
 npm run build >/dev/null
