@@ -185,4 +185,18 @@ mod tests {
         rl.acquire(1_000_000).await;
         assert!(start.elapsed() < Duration::from_millis(50));
     }
+
+    #[tokio::test]
+    async fn acquire_throttles_beyond_the_initial_bucket() {
+        // rate = 10k B/s. The first 10k drains the starting bucket instantly; the
+        // next 10k must wait ~1s for the bucket to refill. Generous bounds keep
+        // this from flaking under load.
+        let rl = RateLimiter::new(10_000);
+        rl.acquire(10_000).await; // drains initial bucket
+        let start = Instant::now();
+        rl.acquire(10_000).await; // must wait for a refill
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(600), "too fast: {elapsed:?}");
+        assert!(elapsed < Duration::from_secs(3), "too slow: {elapsed:?}");
+    }
 }

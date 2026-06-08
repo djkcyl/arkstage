@@ -72,7 +72,6 @@ struct Job {
     cancelled: AtomicBool,
     active_workers: AtomicUsize,
     next_index: AtomicUsize,
-    notify: tokio::sync::Notify,
     speed: Mutex<Speed>,
 }
 
@@ -115,7 +114,6 @@ impl Job {
             cancelled: AtomicBool::new(false),
             active_workers: AtomicUsize::new(0),
             next_index: AtomicUsize::new(0),
-            notify: tokio::sync::Notify::new(),
             speed: Mutex::new(Speed {
                 last_at: now,
                 last_bytes: 0,
@@ -178,7 +176,12 @@ impl Manager {
         self.jobs.lock().unwrap().insert(id, job.clone());
 
         let urls = Arc::new(urls);
-        let workers = self.concurrency.load(Ordering::Relaxed).max(1).min(total.max(1) as usize);
+        // One worker per URL up to the concurrency cap; none for an empty job.
+        let workers = if total == 0 {
+            0
+        } else {
+            self.concurrency.load(Ordering::Relaxed).clamp(1, total as usize)
+        };
         job.active_workers.store(workers, Ordering::Relaxed);
 
         let root = crate::media::media_root(&crate::data_root::data_root());
@@ -214,7 +217,6 @@ impl Manager {
             if job.status() == Status::Paused {
                 job.paused.store(false, Ordering::Relaxed);
                 job.set_status(Status::Running);
-                job.notify.notify_waiters();
                 emit(&self.app, &job.snapshot());
             }
         }
@@ -223,9 +225,8 @@ impl Manager {
     pub fn cancel(&self, id: u64) {
         if let Some(job) = self.get(id) {
             job.cancelled.store(true, Ordering::Relaxed);
+            // A paused worker polls these flags and will observe the cancel.
             job.paused.store(false, Ordering::Relaxed);
-            // Wake any paused workers so they observe the cancel and exit.
-            job.notify.notify_waiters();
         }
     }
 
@@ -248,9 +249,9 @@ async fn worker(job: Arc<Job>, urls: Arc<Vec<String>>, root: Arc<std::path::Path
         if job.cancelled.load(Ordering::Relaxed) {
             break;
         }
-        // Pause gate: wait for resume (or cancel) without spinning.
+        // Pause gate: poll until resumed or cancelled (~100ms latency, no spin).
         while job.paused.load(Ordering::Relaxed) && !job.cancelled.load(Ordering::Relaxed) {
-            job.notify.notified().await;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         if job.cancelled.load(Ordering::Relaxed) {
             break;
