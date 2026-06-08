@@ -1,22 +1,31 @@
 #!/usr/bin/env bash
 #
-# Build a sideloadable Android **debug APK** for prts-reader and copy it to
+# Build sideloadable Android APKs for prts-reader and copy them to
 # build/artifacts/. Mirrors scripts/build-windows.sh in spirit: installs missing
-# toolchain bits, builds, copies the artifact out, and leaves the repo clean.
+# toolchain bits, builds, copies the artifact(s) out, and leaves the repo clean.
 #
-# ABIs: aarch64 (real devices) + x86_64 (emulator). No 32-bit armv7 (by design).
+# Size: this script produces SMALL, per-ABI release APKs. The native Rust .so is
+# strip+LTO+size-optimized via Cargo's [profile.release], and ABIs are split into
+# separate APKs (Tauri --split-per-abi over Gradle product flavors) instead of one
+# giant "universal" debug APK. A single-arch APK lands around ~15-25 MB vs the old
+# ~650 MB all-ABIs-unstripped-debug bundle.
 #
-# Release signing: this script builds a debug-signed APK by default. To cut a
-# signed release later, set the keystore env vars (see docs/android-build.md)
-# and run with RELEASE=1 — the Gradle signingConfig (app/build.gradle.kts) reads
-# those vars and the build switches to --release. With the vars unset, a release
-# build still falls back to debug signing so it installs on a dev device.
+# Default output (3 APKs): arm64-v8a, x86_64, and a combined universal (both ABIs).
+# 32-bit (armv7/x86) is intentionally dropped — no modern target needs it.
+#
+# Mode: RELEASE build by default (strip + optimize). Pass RELEASE=0 for a debug
+# APK (unstripped, on-screen debug console on, cleartext allowed) for dev work.
+#
+# Release signing: a release build is debug-SIGNED unless you provide a keystore.
+# Set the ANDROID_KEYSTORE_* env vars (see docs/android-build.md) and the Gradle
+# signingConfig switches to your real keystore; unset, it falls back to debug
+# signing so the APK still installs on a dev device.
 #
 # Usage:
-#   scripts/build-android.sh                 # debug APK, both ABIs
-#   ABI=x86_64 scripts/build-android.sh      # single ABI (faster, emulator only)
-#   ABI=aarch64 scripts/build-android.sh     # single ABI (real devices)
-#   RELEASE=1 scripts/build-android.sh       # release APK (see signing note)
+#   scripts/build-android.sh                 # release: arm64 + x86_64 + universal APKs
+#   ABI=aarch64 scripts/build-android.sh     # single ABI only (real devices)
+#   ABI=x86_64  scripts/build-android.sh     # single ABI only (emulator)
+#   RELEASE=0   scripts/build-android.sh     # debug APKs (unstripped, dev console)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -58,9 +67,6 @@ ensure_jdk() {
 }
 ensure_jdk
 
-echo "==> Checking Rust Android targets"
-rustup target add aarch64-linux-android x86_64-linux-android
-
 echo "==> Checking NDK at $NDK_HOME"
 if [ ! -d "$NDK_HOME" ]; then
   echo "    installing ndk;$NDK_VERSION (+ platforms;android-35, build-tools;35.0.0)"
@@ -73,17 +79,51 @@ if [ ! -d src-tauri/gen/android ]; then
   npm run tauri android init
 fi
 
-# Script builds ship with the on-screen debug console enabled by default
-# (users can turn it off in Settings). Override with VITE_DEBUG_DEFAULT=false.
-export VITE_DEBUG_DEFAULT="${VITE_DEBUG_DEFAULT:-true}"
-
-# Build mode + ABI selection.
-mode_flag="--debug"
-[ "${RELEASE:-0}" = "1" ] && mode_flag="--release"
-target_args=()
-if [ -n "${ABI:-}" ]; then
-  target_args=(--target "$ABI")
+# Build mode: RELEASE by default (strip + optimize). RELEASE=0 → debug APK.
+RELEASE="${RELEASE:-1}"
+# `tauri android build` defaults to RELEASE — there is no `--release` flag, only
+# `--debug` to opt out. So mode_args is empty for release, `--debug` otherwise.
+mode_args=()
+if [ "$RELEASE" = "1" ]; then
+  mode_desc="release"
+  # Release ships a clean production build: on-screen debug console OFF by default
+  # (users can still enable it in Settings).
+  export VITE_DEBUG_DEFAULT="${VITE_DEBUG_DEFAULT:-false}"
+else
+  mode_args=(--debug)
+  mode_desc="debug"
+  # Debug builds default the on-screen console ON for dev work.
+  export VITE_DEBUG_DEFAULT="${VITE_DEBUG_DEFAULT:-true}"
 fi
+
+# ABI selection. Default = arm64-v8a (real devices) + x86_64 (emulator/x86). 32-bit
+# is dropped by design. ABI=<tauri-target> restricts to a single architecture.
+# Map Tauri target name -> Rust toolchain triple.
+declare -A RUST_TRIPLE=(
+  [aarch64]=aarch64-linux-android
+  [x86_64]=x86_64-linux-android
+  [armv7]=armv7-linux-androideabi
+  [i686]=i686-linux-android
+)
+if [ -n "${ABI:-}" ]; then
+  TARGETS=("$ABI")
+else
+  TARGETS=(aarch64 x86_64)
+fi
+# Validate + collect the Rust triples to install.
+triples=()
+for t in "${TARGETS[@]}"; do
+  if [ -z "${RUST_TRIPLE[$t]:-}" ]; then
+    echo "ERROR: unknown ABI '$t' (use one of: ${!RUST_TRIPLE[*]})" >&2
+    exit 2
+  fi
+  triples+=("${RUST_TRIPLE[$t]}")
+done
+target_args=()
+for t in "${TARGETS[@]}"; do target_args+=(--target "$t"); done
+
+echo "==> Checking Rust Android targets: ${triples[*]}"
+rustup target add "${triples[@]}"
 
 # --- Pre-build cleanup: drop junk, then remove any stale APK from a prior run
 # so the output dir only ever holds the current build's artifacts. ---
@@ -95,12 +135,24 @@ rm -f "$ARTIFACTS_DIR"/*.apk
 # Ensure a fresh frontend bundle.
 rm -rf build/dist
 
-echo "==> Building Android APK ($mode_flag, ABI=${ABI:-aarch64+x86_64}, JAVA_HOME=$JAVA_HOME)"
-npm run tauri android build -- --apk "$mode_flag" "${target_args[@]}"
+# Clear stale APK outputs so the final collection only sees this run's artifacts.
+out_dir="src-tauri/gen/android/app/build/outputs/apk"
+rm -rf "$out_dir"
+
+# Build per-ABI APKs (one small APK per architecture). --split-per-abi maps to
+# Tauri's per-arch Gradle product flavors instead of the bloated universal flavor.
+echo "==> Building per-ABI Android APK(s) ($mode_desc, ABI=${TARGETS[*]}, JAVA_HOME=$JAVA_HOME)"
+npm run tauri android build -- --apk "${mode_args[@]}" "${target_args[@]}" --split-per-abi
+
+# Also build a combined "universal" APK (all selected ABIs in one) when more than
+# one ABI is targeted — handy for "just give me one APK that installs anywhere".
+if [ "${#TARGETS[@]}" -gt 1 ]; then
+  echo "==> Building combined universal APK ($mode_desc, ABIs=${TARGETS[*]})"
+  npm run tauri android build -- --apk "${mode_args[@]}" "${target_args[@]}"
+fi
 
 # Copy the produced APK(s) to build/artifacts/. Tauri emits them under
 # app/build/outputs/apk/<flavor>/<buildType>/.
-out_dir="src-tauri/gen/android/app/build/outputs/apk"
 mapfile -t apks < <(find "$out_dir" -name "*.apk" 2>/dev/null)
 if [ "${#apks[@]}" -eq 0 ]; then
   echo "ERROR: no APK produced under $out_dir" >&2

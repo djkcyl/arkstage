@@ -12,6 +12,18 @@ rust-version = "1.77.2"
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Size-optimized release profile (Tauri's recommended settings).
+# Without this, the Android cdylib ships unoptimized + with full debug symbols,
+# which is the dominant per-arch cause of the bloated APK (a single arch .so was
+# ~160 MB). strip + LTO + size-opt bring each arch .so down to the ~15-25 MB range.
+# Applies to the desktop release build too (smaller Windows binary as a bonus).
+[profile.release]
+panic = "abort"     # drop unwinding tables (smaller; Tauri apps don't unwind across FFI)
+codegen-units = 1   # maximize cross-unit optimization (slower compile, smaller output)
+lto = "thin"        # thin LTO — nearly all the size win of fat LTO, much faster compile
+opt-level = "s"     # optimize for binary size
+strip = true        # strip symbols from the final binary
+
 [build-dependencies]
 tauri-build = { version = "2.5.6", features = [] }
 
