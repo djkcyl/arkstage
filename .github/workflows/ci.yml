@@ -47,7 +47,12 @@ jobs:
       # macOS/Windows → "Cannot find native binding" at `tauri build`. The reliable
       # fix (npm's own recommendation) is to drop the incomplete lockfile and resolve
       # fresh, which installs the correct per-platform optional dependencies.
-      - run: rm -f package-lock.json && npm install --no-audit --no-fund
+      # `shell: bash` so `rm -f` also works on Windows (its default shell is
+      # PowerShell, whose `rm` is Remove-Item and rejects `-f`). Git-bash ships on
+      # the windows runner.
+      - name: Install dependencies (fresh resolve for cross-platform native deps)
+        shell: bash
+        run: rm -f package-lock.json && npm install --no-audit --no-fund
       - name: Run static test suite (tsc + vite build + cargo test/build)
         run: bash scripts/test-static.sh
 
@@ -90,7 +95,12 @@ jobs:
       # macOS/Windows → "Cannot find native binding" at `tauri build`. The reliable
       # fix (npm's own recommendation) is to drop the incomplete lockfile and resolve
       # fresh, which installs the correct per-platform optional dependencies.
-      - run: rm -f package-lock.json && npm install --no-audit --no-fund
+      # `shell: bash` so `rm -f` also works on Windows (its default shell is
+      # PowerShell, whose `rm` is Remove-Item and rejects `-f`). Git-bash ships on
+      # the windows runner.
+      - name: Install dependencies (fresh resolve for cross-platform native deps)
+        shell: bash
+        run: rm -f package-lock.json && npm install --no-audit --no-fund
       - name: Build the app (native target)
         # CI/script builds ship with the on-screen debug console enabled by default
         # (users can turn it off in Settings). Ordinary local builds default off.

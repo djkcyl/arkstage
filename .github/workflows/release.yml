@@ -60,7 +60,11 @@ jobs:
       # carries linux-x64 native binaries, so npm ci / npm install both leave the
       # @tauri-apps/cli platform binary missing on macOS/Windows → "Cannot find native
       # binding" at `tauri build`. Drop the incomplete lockfile and resolve fresh.
-      - run: rm -f package-lock.json && npm install --no-audit --no-fund
+      # `shell: bash` so `rm -f` also works on the Windows runner (default shell is
+      # PowerShell, whose `rm` is Remove-Item and rejects `-f`).
+      - name: Install dependencies (fresh resolve for cross-platform native deps)
+        shell: bash
+        run: rm -f package-lock.json && npm install --no-audit --no-fund
 
       - name: Build and publish to the release
         uses: tauri-apps/tauri-action@v0
