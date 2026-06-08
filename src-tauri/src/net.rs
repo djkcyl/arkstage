@@ -136,8 +136,10 @@ impl RateLimiter {
     }
 }
 
-/// Global limiter instance (default unlimited). Download workers and the
-/// `prts-cdn://` handler consume from this so the cap is process-wide.
+/// Global limiter instance (default unlimited). The bulk-download workers
+/// consume from this so the cap is process-wide across concurrent jobs. The
+/// `prts-cdn://` playback handler deliberately does NOT meter through it —
+/// interactive media must load at full speed even when a download cap is set.
 pub fn limiter() -> &'static RateLimiter {
     static LIMITER: OnceLock<RateLimiter> = OnceLock::new();
     LIMITER.get_or_init(|| RateLimiter::new(0))
