@@ -77,8 +77,9 @@ input {
   outline: none;
 }
 
-/* Edge-to-edge safe-area padding for top-level page containers (Android). */
-.settings-page,
+/* Edge-to-edge safe-area padding for top-level page containers (Android).
+   `.settings-page` is handled in browser.css instead — its `padding` shorthand
+   there would otherwise clobber a `padding-top` set here. */
 .browser-page {
   padding-top: var(--safe-top);
 }

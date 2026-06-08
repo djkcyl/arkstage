@@ -39,7 +39,8 @@
 .browser-content {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 24px;
+  /* Bottom inset so the last story rows clear the edge-to-edge nav bar. */
+  padding: 16px 24px calc(16px + var(--safe-bottom));
 }
 
 .category {
@@ -162,7 +163,10 @@
 /* Settings page */
 /* Full-width scroll container (scrollbar sits at the window edge) ... */
 .settings-page {
-  padding: 24px;
+  /* Safe-area top baked into the shorthand: a separate `padding-top` rule in
+     global.css would be clobbered by this shorthand (equal specificity, later
+     import), so the inset must live here to survive on Android. */
+  padding: calc(24px + var(--safe-top)) 24px calc(24px + var(--safe-bottom));
   width: 100%;
   overflow-y: auto;
   height: 100%;
@@ -184,7 +188,7 @@
 /* Tighten spacing on small windows. */
 @media (max-width: 640px) {
   .settings-page {
-    padding: 16px;
+    padding: calc(16px + var(--safe-top)) 16px calc(16px + var(--safe-bottom));
   }
   .setting-group {
     margin-bottom: 18px;
