@@ -1,5 +1,6 @@
 mod commands;
 mod data_root;
+mod download;
 mod media;
 mod models;
 mod net;
@@ -178,6 +179,8 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            // Register the managed download engine (bulk predownload jobs).
+            download::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -196,7 +199,14 @@ pub fn run() {
             assets::download_asset,
             assets::get_asset_path,
             assets::read_asset_text,
-            assets::batch_download_assets,
+            // Managed bulk downloads
+            download::download_start,
+            download::download_pause,
+            download::download_resume,
+            download::download_cancel,
+            download::download_status,
+            download::download_settings_get,
+            download::download_settings_set,
             // Network policy
             net::set_allow_online,
             net::get_allow_online,
