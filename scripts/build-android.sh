@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Build a sideloadable Android **debug APK** for prts-reader and copy it to the
-# project root. Mirrors scripts/build-windows.sh in spirit: installs missing
+# Build a sideloadable Android **debug APK** for prts-reader and copy it to
+# build/artifacts/. Mirrors scripts/build-windows.sh in spirit: installs missing
 # toolchain bits, builds, copies the artifact out, and leaves the repo clean.
 #
 # ABIs: aarch64 (real devices) + x86_64 (emulator). No 32-bit armv7 (by design).
@@ -85,10 +85,20 @@ if [ -n "${ABI:-}" ]; then
   target_args=(--target "$ABI")
 fi
 
+# --- Pre-build cleanup: drop junk, then remove any stale APK from a prior run
+# so the output dir only ever holds the current build's artifacts. ---
+echo "==> Pre-build cleanup"
+scripts/clean.sh --junk
+ARTIFACTS_DIR="build/artifacts"
+mkdir -p "$ARTIFACTS_DIR"
+rm -f "$ARTIFACTS_DIR"/*.apk
+# Ensure a fresh frontend bundle.
+rm -rf build/dist
+
 echo "==> Building Android APK ($mode_flag, ABI=${ABI:-aarch64+x86_64}, JAVA_HOME=$JAVA_HOME)"
 npm run tauri android build -- --apk "$mode_flag" "${target_args[@]}"
 
-# Copy the produced APK(s) to the project root. Tauri emits them under
+# Copy the produced APK(s) to build/artifacts/. Tauri emits them under
 # app/build/outputs/apk/<flavor>/<buildType>/.
 out_dir="src-tauri/gen/android/app/build/outputs/apk"
 mapfile -t apks < <(find "$out_dir" -name "*.apk" 2>/dev/null)
@@ -97,11 +107,15 @@ if [ "${#apks[@]}" -eq 0 ]; then
   exit 1
 fi
 for apk in "${apks[@]}"; do
-  dest="./$(basename "$apk")"
+  dest="$ARTIFACTS_DIR/$(basename "$apk")"
   cp -f "$apk" "$dest"
   echo "    -> $dest"
 done
 
+# --- Post-build cleanup: clear scratch/junk; final APK(s) stay in artifacts. ---
+echo "==> Post-build cleanup"
+scripts/clean.sh --junk
+
 echo
-echo "==> Done. APK(s) in the project root:"
-ls -lh ./*.apk
+echo "==> Done. APK(s) in $ARTIFACTS_DIR:"
+ls -lh "$ARTIFACTS_DIR"/*.apk

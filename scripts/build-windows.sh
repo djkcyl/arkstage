@@ -28,7 +28,11 @@ TRIPLE_DIR="src-tauri/target/x86_64-pc-windows-gnu"
 # --- Pre-build cleanup: start fresh so a stale/partial previous build can't leak in.
 # Removes the prior installer and (unless KEEP_TARGET=1) the cross-compile cache. ---
 echo "==> Cleaning stale build products before building"
-rm -f ./*-setup.exe
+echo "==> Pre-build cleanup"
+scripts/clean.sh --junk
+ARTIFACTS_DIR="build/artifacts"
+mkdir -p "$ARTIFACTS_DIR"
+rm -f "$ARTIFACTS_DIR"/*-setup.exe
 if [ "${KEEP_TARGET:-0}" = "1" ]; then
   echo "    KEEP_TARGET=1; keeping cross-compile cache at $TRIPLE_DIR (faster rebuilds)"
 else
@@ -66,8 +70,8 @@ if [ -z "$installer" ]; then
   exit 1
 fi
 
-# Put the finished installer directly in the project root.
-dest="./$(basename "$installer")"
+# Put the finished installer in build/artifacts/.
+dest="$ARTIFACTS_DIR/$(basename "$installer")"
 cp -f "$installer" "$dest"
 
 # Remove the heavy intermediate cross-compile target dir (KEEP_TARGET=1 to keep it).
@@ -79,5 +83,7 @@ else
 fi
 
 echo
-echo "==> Done. Installer is in the project root:"
+echo "==> Post-build cleanup"
+scripts/clean.sh --junk
+echo "==> Done. Installer is in $ARTIFACTS_DIR:"
 ls -lh "$dest"

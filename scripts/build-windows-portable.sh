@@ -14,8 +14,8 @@
 #   - GNU ABI (not MSVC). Runs on Windows; for the "official" artifact use the
 #     windows-latest CI workflow. The exe is unsigned (SmartScreen may warn).
 #
-# Output: ./prts-reader-portable/ (folder) and ./prts-reader-portable.zip in the
-# PROJECT ROOT. The heavy cross-compile target dir is removed (KEEP_TARGET=1 keeps it).
+# Output: build/artifacts/prts-reader-portable/ (folder) and prts-reader-portable.zip.
+# The heavy cross-compile target dir is removed (KEEP_TARGET=1 keeps it).
 #
 # Usage: scripts/build-windows-portable.sh   [KEEP_TARGET=1 scripts/build-windows-portable.sh]
 set -euo pipefail
@@ -24,13 +24,17 @@ cd "$(dirname "$0")/.."
 SUDO=""
 [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null && SUDO="sudo"
 
-OUT="prts-reader-portable"
+ARTIFACTS_DIR="build/artifacts"
+OUT="$ARTIFACTS_DIR/prts-reader-portable"
 TRIPLE_DIR="src-tauri/target/x86_64-pc-windows-gnu"
 
 # --- Pre-build cleanup: start from a clean slate so a stale/partial previous build
 # can't leak into this one. Removes prior products and (unless KEEP_TARGET=1) the
 # cross-compile cache. ---
 echo "==> Cleaning stale build products before building"
+echo "==> Pre-build cleanup"
+scripts/clean.sh --junk
+mkdir -p "$ARTIFACTS_DIR"
 rm -rf "$OUT" "$OUT.zip"
 if [ "${KEEP_TARGET:-0}" = "1" ]; then
   echo "    KEEP_TARGET=1; keeping cross-compile cache at $TRIPLE_DIR (faster rebuilds)"
@@ -89,6 +93,8 @@ else
 fi
 
 echo
-echo "==> Done. Portable build in the project root:"
+echo "==> Post-build cleanup"
+scripts/clean.sh --junk
+echo "==> Done. Portable build in $ARTIFACTS_DIR:"
 ls -lh "$OUT"/ 2>/dev/null
 [ -f "$OUT.zip" ] && ls -lh "$OUT.zip"
