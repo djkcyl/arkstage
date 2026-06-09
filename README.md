@@ -2,7 +2,7 @@
 
 **方舟剧场** 是一个明日方舟（Arknights）剧情的**离线演出回放器**——不是文字阅读器，而是把游戏内的演出**原样重新上演**。它把 [PRTS Wiki](https://prts.wiki) 上的**原版剧情演出引擎**（ScenarioSimulator）搬进一个跨平台桌面应用里运行——带立绘、背景、配音与对话动画——并支持在不限量网络下**预下载**指定范围的资源，之后在无网或计费网络环境下**完全离线**播放。
 
-[![CI](https://github.com/djkcyl/prts-reader/actions/workflows/ci.yml/badge.svg)](https://github.com/djkcyl/prts-reader/actions/workflows/ci.yml)
+[![CI](https://github.com/djkcyl/arkstage/actions/workflows/ci.yml/badge.svg)](https://github.com/djkcyl/arkstage/actions/workflows/ci.yml)
 
 > 基于 **Tauri 2 + React 19 + TypeScript**。桌面端复用 Wiki 原生引擎，不自研渲染器，最大程度还原游戏内演出。
 
@@ -23,7 +23,7 @@
 
 ### 1. 下载安装包
 
-前往 [**Releases**](https://github.com/djkcyl/prts-reader/releases) 下载对应平台的安装包：
+前往 [**Releases**](https://github.com/djkcyl/arkstage/releases) 下载对应平台的安装包：
 
 | 平台 | 文件 |
 |------|------|
@@ -31,7 +31,7 @@
 | macOS | `.dmg`（区分 Apple Silicon / Intel） |
 | Linux | `.AppImage` / `.deb` / `.rpm` |
 
-> 想要尝鲜可在 [Actions](https://github.com/djkcyl/prts-reader/actions) 的 CI 运行记录里下载每次提交自动构建的「CI 版」产物。
+> 想要尝鲜可在 [Actions](https://github.com/djkcyl/arkstage/actions) 的 CI 运行记录里下载每次提交自动构建的「CI 版」产物。
 
 ### 2. 首次使用
 
