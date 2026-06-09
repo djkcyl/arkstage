@@ -51,6 +51,6 @@ Screenshots are written to `/tmp/prts-e2e/` (`01_home` … `05_story_b_loaded`).
 ## Requirements / caveats
 
 - Tools: `Xvfb`, `xdotool`, ImageMagick (`import`, `convert`), `npm`, a built Rust toolchain (`cargo`).
-- `test-e2e.sh` clears `~/.local/share/com.prts.reader/{cache,media,assets}` for a deterministic run.
+- `test-e2e.sh` clears `~/.local/share/cn.aunly.arkstage/{cache,media,assets}` for a deterministic run.
 - **Audio is not tested** — Linux WebKitGTK often lacks mp3/ogg codecs; this verifies the visual pipeline only. Real target platforms (Windows/macOS) ship codecs.
 - UI coordinates assume the window pinned at `0,0` size `1024x600` with no window manager (the script pins this). Override the display with `PRTS_TEST_DISPLAY=:N`.

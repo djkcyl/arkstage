@@ -36,7 +36,7 @@ mod imp {
             .l()
             .map_err(|e| e.to_string())?;
         let name = env
-            .new_string("com.prts.reader.DownloadService")
+            .new_string("cn.aunly.arkstage.DownloadService")
             .map_err(|e| e.to_string())?;
         let cls = env
             .call_method(
