@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "prts-reader",
+  "productName": "Arkstage",
   "version": "0.1.0",
   "identifier": "com.prts.reader",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "PRTS 剧情阅读器",
+        "title": "方舟剧场",
         "width": 1024,
         "height": 600,
         "minWidth": 800,

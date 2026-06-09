@@ -1,6 +1,6 @@
 # Android Build & Run
 
-prts-reader runs on Android as a Tauri 2 app: the same React frontend and Rust
+方舟剧场 (Arkstage) runs on Android as a Tauri 2 app: the same React frontend and Rust
 backend as desktop, with platform divergence isolated to a few points (see
 `docs/superpowers/specs/2026-06-05-android-port-design.md`). Storage is fixed to
 the app-private external files dir; there is no resource-directory picker on
@@ -142,11 +142,11 @@ devices); 32-bit is dropped by design.
 
 - **`.github/workflows/ci.yml`** — `build-android` job: on master pushes (and
   manual `workflow_dispatch`) builds the two APKs and uploads them as a CI
-  artifact (`prts-reader-android-<sha>`). Debug-signed (no keystore in CI), but
+  artifact (`arkstage-android-<sha>`). Debug-signed (no keystore in CI), but
   installable for testing.
 - **`.github/workflows/release.yml`** — `android` job: on a `v*` tag, builds the
   two APKs and attaches them to the GitHub Release as
-  `prts-reader-<tag>-android-arm64-v8a.apk` / `…-x86_64.apk`.
+  `arkstage-<tag>-android-arm64-v8a.apk` / `…-x86_64.apk`.
 
 Both run `npm run tauri android build -- --apk --target aarch64 --target x86_64
 --split-per-abi` after setting up JDK 21, the Android SDK + NDK 27.2.12479018

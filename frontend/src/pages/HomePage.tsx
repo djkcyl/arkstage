@@ -16,6 +16,15 @@ export default function HomePage() {
         paddingTop: "calc(24px + env(safe-area-inset-top, 0px))",
       }}
     >
+      <img
+        src="/logo.png"
+        alt="方舟剧场"
+        style={{
+          width: "128px",
+          height: "128px",
+          filter: "drop-shadow(0 8px 24px rgba(0, 0, 0, 0.5))",
+        }}
+      />
       <h1
         style={{
           fontSize: "36px",
@@ -24,7 +33,7 @@ export default function HomePage() {
           textAlign: "center",
         }}
       >
-        PRTS 剧情阅读器
+        方舟剧场
       </h1>
       <p
         style={{
@@ -35,7 +44,7 @@ export default function HomePage() {
           lineHeight: "1.6",
         }}
       >
-        明日方舟剧情离线阅读器
+        明日方舟剧情 · 离线演出回放
         <br />
         从 PRTS Wiki 获取全部游戏内剧情，支持本地缓存
       </p>

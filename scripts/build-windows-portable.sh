@@ -14,7 +14,7 @@
 #   - GNU ABI (not MSVC). Runs on Windows; for the "official" artifact use the
 #     windows-latest CI workflow. The exe is unsigned (SmartScreen may warn).
 #
-# Output: build/artifacts/prts-reader-portable/ (folder) and prts-reader-portable.zip.
+# Output: build/artifacts/arkstage-portable/ (folder) and arkstage-portable.zip.
 # The heavy cross-compile target dir is removed (KEEP_TARGET=1 keeps it).
 #
 # Usage: scripts/build-windows-portable.sh   [KEEP_TARGET=1 scripts/build-windows-portable.sh]
@@ -25,7 +25,7 @@ SUDO=""
 [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null && SUDO="sudo"
 
 ARTIFACTS_DIR="build/artifacts"
-OUT="$ARTIFACTS_DIR/prts-reader-portable"
+OUT="$ARTIFACTS_DIR/arkstage-portable"
 TRIPLE_DIR="src-tauri/target/x86_64-pc-windows-gnu"
 
 # --- Pre-build cleanup: start from a clean slate so a stale/partial previous build
@@ -76,14 +76,14 @@ echo "==> Built: $exe"
 # runtime DLLs Tauri may have emitted next to it (e.g. WebView2Loader.dll).
 rm -rf "$OUT" "$OUT.zip"
 mkdir -p "$OUT"
-cp -f "$exe" "$OUT/prts-reader.exe"
+cp -f "$exe" "$OUT/arkstage.exe"
 find "$REL_DIR" -maxdepth 1 -name '*.dll' -exec cp -f {} "$OUT/" \;
 
 # Zip it for easy transfer (zip if available, else leave the folder). Zip from
-# inside artifacts/ so the archive root is a single `prts-reader-portable/` folder
-# rather than the nested `build/artifacts/prts-reader-portable/` path.
+# inside artifacts/ so the archive root is a single `arkstage-portable/` folder
+# rather than the nested `build/artifacts/arkstage-portable/` path.
 if command -v zip >/dev/null; then
-  ( cd "$ARTIFACTS_DIR" && rm -f prts-reader-portable.zip && zip -rq prts-reader-portable.zip prts-reader-portable )
+  ( cd "$ARTIFACTS_DIR" && rm -f arkstage-portable.zip && zip -rq arkstage-portable.zip arkstage-portable )
 fi
 
 # Clean the heavy intermediate cross-compile target dir (KEEP_TARGET=1 to keep).
