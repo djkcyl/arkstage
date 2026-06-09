@@ -209,7 +209,7 @@ pub fn reset_resource_dir() -> Result<ResourceDirInfo, String> {
 }
 
 /// Android: the app-private external files dir
-/// (`/storage/emulated/0/Android/data/com.prts.reader/files`). No runtime
+/// (`/storage/emulated/0/Android/data/cn.aunly.arkstage/files`). No runtime
 /// permission needed; visible to file managers; large quota; cleared on uninstall.
 /// Obtained via JNI `Context.getExternalFilesDir(null)` because Tauri's path
 /// resolver maps `app_data_dir()` to *internal* storage on Android.

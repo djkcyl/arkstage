@@ -66,7 +66,7 @@ until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep
 
 # Install + launch
 adb install -r build/artifacts/app-universal-debug.apk
-adb shell am start -n com.prts.reader/.MainActivity
+adb shell am start -n cn.aunly.arkstage/.MainActivity
 
 # Observe
 adb exec-out screencap -p > /tmp/shot.png
@@ -88,7 +88,7 @@ Enable Developer Options → USB debugging, connect, then:
 
 ```bash
 adb install -r build/artifacts/app-universal-debug.apk
-adb shell am start -n com.prts.reader/.MainActivity
+adb shell am start -n cn.aunly.arkstage/.MainActivity
 ```
 
 ## Storage location
@@ -96,7 +96,7 @@ adb shell am start -n com.prts.reader/.MainActivity
 Data lives in the app-private external files dir:
 
 ```
-/storage/emulated/0/Android/data/com.prts.reader/files/
+/storage/emulated/0/Android/data/cn.aunly.arkstage/files/
   ├── cache/    (story scripts, story index, widget bundle)
   ├── assets/   (engine JS/CSS/font)
   └── media/    (content-addressed CDN media store)
@@ -182,13 +182,13 @@ Android:
   CSS/JS, the four `ui_*.png` toolbar icons, scene art, and audio — all served
   and cached via the handler.
 - **External files dir / JNI:** confirmed. The JNI `getExternalFilesDir(null)`
-  call resolves to `/storage/emulated/0/Android/data/com.prts.reader/files/`, and
+  call resolves to `/storage/emulated/0/Android/data/cn.aunly.arkstage/files/`, and
   all `cache/`, `assets/`, `media/` data lands there. No internal-storage
   fallback was needed.
 - **Asset-protocol scope:** confirmed. The NotoSans font and engine deps load via
   `convertFileSrc()` → `asset://` from the external `assets/engine/` dir with **no**
   "Not allowed to load local resource" / scope-denial errors. The
-  `**/Android/data/com.prts.reader/files/**` scope glob is sufficient.
+  `**/Android/data/cn.aunly.arkstage/files/**` scope glob is sufficient.
 - **Headless-emulator WebView rendering:** works. The home, browser, settings, and
   the engine player (background art + character sprite + dialogue) all render
   under `swiftshader_indirect` — no device fallback required in this environment.

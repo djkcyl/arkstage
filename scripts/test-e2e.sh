@@ -21,7 +21,7 @@ cd "$(dirname "$0")/.."
 
 # ---- config -----------------------------------------------------------------
 DISP="${PRTS_TEST_DISPLAY:-:99}"
-APPID="com.prts.reader"
+APPID="cn.aunly.arkstage"
 APPDATA="${XDG_DATA_HOME:-$HOME/.local/share}/$APPID"
 MEDIA="$APPDATA/media"
 CACHE="$APPDATA/cache"

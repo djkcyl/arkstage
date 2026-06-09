@@ -1,4 +1,4 @@
-package com.prts.reader
+package cn.aunly.arkstage
 
 import android.Manifest
 import android.content.pm.PackageManager
