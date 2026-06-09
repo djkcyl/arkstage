@@ -75,7 +75,7 @@ jobs:
           VITE_DEBUG_DEFAULT: "true"
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "PRTS 剧情阅读器 ${{ github.ref_name }}"
+          releaseName: "方舟剧场 ${{ github.ref_name }}"
           releaseBody: "从下方 Assets 下载对应平台的安装包。"
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
@@ -162,8 +162,8 @@ jobs:
           x86=$(find "$out" -path '*x86_64*' -name '*release*.apk' | head -1)
           test -n "$arm" || { echo "::error::arm64-v8a APK not found under $out"; find "$out" -name '*.apk'; exit 1; }
           test -n "$x86" || { echo "::error::x86_64 APK not found under $out"; find "$out" -name '*.apk'; exit 1; }
-          cp "$arm" "dist-apk/prts-reader-${{ github.ref_name }}-android-arm64-v8a.apk"
-          cp "$x86" "dist-apk/prts-reader-${{ github.ref_name }}-android-x86_64.apk"
+          cp "$arm" "dist-apk/arkstage-${{ github.ref_name }}-android-arm64-v8a.apk"
+          cp "$x86" "dist-apk/arkstage-${{ github.ref_name }}-android-x86_64.apk"
           ls -lh dist-apk
 
       - name: Attach APKs to the release

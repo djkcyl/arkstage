@@ -1,6 +1,6 @@
-# PRTS 剧情阅读器
+# 方舟剧场（Arkstage）
 
-明日方舟（Arknights）剧情**离线**阅读器。它把 [PRTS Wiki](https://prts.wiki) 上的**原版剧情演出引擎**（ScenarioSimulator）搬进一个跨平台桌面应用里运行——带立绘、背景、配音与对话动画——并支持在不限量网络下**预下载**指定范围的资源，之后在无网或计费网络环境下**完全离线**播放。
+**方舟剧场** 是一个明日方舟（Arknights）剧情的**离线演出回放器**——不是文字阅读器，而是把游戏内的演出**原样重新上演**。它把 [PRTS Wiki](https://prts.wiki) 上的**原版剧情演出引擎**（ScenarioSimulator）搬进一个跨平台桌面应用里运行——带立绘、背景、配音与对话动画——并支持在不限量网络下**预下载**指定范围的资源，之后在无网或计费网络环境下**完全离线**播放。
 
 [![CI](https://github.com/djkcyl/prts-reader/actions/workflows/ci.yml/badge.svg)](https://github.com/djkcyl/prts-reader/actions/workflows/ci.yml)
 
@@ -152,7 +152,7 @@ scripts/build-windows.sh
 #   npm run tauri:build -- --target x86_64-pc-windows-gnu   # 注意：不要带 --bundles
 ```
 
-脚本会把成品安装包 `prts-reader_<版本>_x64-setup.exe` 放到 **`build/artifacts/`**，并在构建后清除庞大的交叉编译中间产物（想保留以加速重复构建可设 `KEEP_TARGET=1`）。整个 `build/` 已在 `.gitignore` 中忽略。
+脚本会把成品安装包 `Arkstage_<版本>_x64-setup.exe` 放到 **`build/artifacts/`**，并在构建后清除庞大的交叉编译中间产物（想保留以加速重复构建可设 `KEEP_TARGET=1`）。整个 `build/` 已在 `.gitignore` 中忽略。
 
 要点与限制：
 
@@ -166,7 +166,7 @@ scripts/build-windows.sh
 ### 项目结构
 
 ```
-prts-reader/
+arkstage/
 ├─ frontend/                 # React 前端（index.html / vite·ts·eslint 配置）
 │  └─ src/
 │     ├─ pages/              # 首页 / 浏览 / 播放器 / 设置

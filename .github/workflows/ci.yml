@@ -111,7 +111,7 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: prts-reader-${{ matrix.platform }}-${{ github.sha }}
+          name: arkstage-${{ matrix.platform }}-${{ github.sha }}
           if-no-files-found: warn
           path: |
             src-tauri/target/release/bundle/**/*.deb
@@ -169,6 +169,6 @@ jobs:
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: prts-reader-android-${{ github.sha }}
+          name: arkstage-android-${{ github.sha }}
           if-no-files-found: warn
           path: src-tauri/gen/android/app/build/outputs/apk/**/release/*.apk

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build sideloadable Android APKs for prts-reader and copy them to
+# Build sideloadable Android APKs for Arkstage (方舟剧场) and copy them to
 # build/artifacts/. Mirrors scripts/build-windows.sh in spirit: installs missing
 # toolchain bits, builds, copies the artifact(s) out, and leaves the repo clean.
 #

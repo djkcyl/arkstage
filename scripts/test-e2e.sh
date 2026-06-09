@@ -62,7 +62,7 @@ wait_file(){ local f=$1 t=${2:-30} d=$((SECONDS+${2:-30})); while [ ! -e "$f" ] 
 wait_media(){ local target=$1 d=$((SECONDS+${2:-40})); while [ "$(count_media)" -lt "$target" ] && [ $SECONDS -lt $d ]; do sleep 2; done; }
 
 echo "=============================================================="
-echo " PRTS Reader — E2E smoke test (headless Xvfb + xdotool)"
+echo " Arkstage (方舟剧场) — E2E smoke test (headless Xvfb + xdotool)"
 echo "=============================================================="
 
 # ---- 0. tooling -------------------------------------------------------------
@@ -88,7 +88,7 @@ info "launching: DISPLAY=$DISP PRTS_DATA_DIR=$APPDATA npm run tauri:dev (cold-is
 ( DISPLAY=$DISP PRTS_DATA_DIR="$APPDATA" npm run tauri:dev >"$APP_LOG" 2>&1 & )
 WID=""
 for _ in $(seq 1 120); do
-  WID=$(DISPLAY=$DISP xdotool search --name "PRTS 剧情阅读器" 2>/dev/null | head -1)
+  WID=$(DISPLAY=$DISP xdotool search --name "方舟剧场" 2>/dev/null | head -1)
   [ -n "$WID" ] && break
   if grep -qiE "panicked|Failed to initialize GTK" "$APP_LOG"; then
     no "app crashed during launch"; grep -iE "panicked|Failed to initialize" "$APP_LOG" | head -2; exit 1
