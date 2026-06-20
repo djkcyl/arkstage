@@ -32,14 +32,22 @@ export default function StoryBrowserPage() {
         .map((cat) => ({
           ...cat,
           chapters: cat.chapters
-            .map((ch) => ({
-              ...ch,
-              stories: ch.stories.filter(
-                (s) =>
-                  s.title.toLowerCase().includes(q) ||
-                  s.page_title.toLowerCase().includes(q)
-              ),
-            }))
+            .map((ch) => {
+              // Matching the activity/chapter name keeps all of its stories.
+              const chapterMatch =
+                ch.name.toLowerCase().includes(q) ||
+                (ch.activity_name?.toLowerCase().includes(q) ?? false);
+              return {
+                ...ch,
+                stories: chapterMatch
+                  ? ch.stories
+                  : ch.stories.filter(
+                      (s) =>
+                        s.title.toLowerCase().includes(q) ||
+                        s.page_title.toLowerCase().includes(q)
+                    ),
+              };
+            })
             .filter((ch) => ch.stories.length > 0),
         }))
         .filter((cat) => cat.chapters.length > 0),
@@ -122,7 +130,10 @@ export default function StoryBrowserPage() {
                 {cat.chapters.map((ch, ci) => (
                   <div key={ci} className="chapter">
                     <div className="chapter-name">
-                      {ch.name}
+                      {ch.activity_name && (
+                        <span className="chapter-activity">{ch.activity_name}</span>
+                      )}
+                      <span className="chapter-label">{ch.name}</span>
                       <button
                         className="nav-btn"
                         style={{ marginLeft: "10px", fontSize: "11px" }}

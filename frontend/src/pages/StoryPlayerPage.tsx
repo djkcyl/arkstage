@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { bootEngineInFrame } from "../lib/engineBoot";
 import { loadBundle } from "../lib/predownload";
+import { setReading } from "../lib/keepalive";
 
 /**
  * Story player page — loads the ORIGINAL PRTS ScenarioSimulator engine via bootEngine().
@@ -23,6 +24,12 @@ export default function StoryPlayerPage() {
   const [error, setError] = useState<string | null>(null);
 
   const decodedTitle = pageTitle ? decodeURIComponent(pageTitle) : "";
+
+  // Drive the Android keep-alive notification's "reading a story" state.
+  useEffect(() => {
+    setReading(true);
+    return () => setReading(false);
+  }, []);
 
   useEffect(() => {
     if (!decodedTitle || !containerRef.current) return;

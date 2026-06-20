@@ -12,6 +12,8 @@ export interface StoryCategory {
 
 export interface StoryChapter {
   name: string;
+  /** Broader activity/zone the chapter belongs to (e.g. "黑暗时代·上", "集成战略"). */
+  activity_name?: string | null;
   stories: StoryEntry[];
 }
 

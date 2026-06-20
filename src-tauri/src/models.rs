@@ -14,6 +14,10 @@ pub struct Category {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chapter {
     pub name: String,
+    /// The broader activity/zone the chapter belongs to (e.g. "黑暗时代·上",
+    /// "集成战略"). `None` for chapters that have no enclosing activity label.
+    #[serde(default)]
+    pub activity_name: Option<String>,
     pub stories: Vec<StoryEntry>,
 }
 

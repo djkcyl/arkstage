@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { bootEngineInFrame } from "./engineBoot";
 import type { WidgetBundle } from "./engineBoot";
+import { setDownloadProgress } from "./keepalive";
 
 /**
  * Predownload status. Indexing (manifest) and downloading run CONCURRENTLY now
@@ -159,16 +160,25 @@ const ZERO_JOB: JobSnapshot = {
  * to the job so indexing and downloading run CONCURRENTLY. Reports both phases'
  * progress via `onStatus` (two bars) and exposes one pause/cancel `onSession`.
  *
- * Also starts the Android keep-alive foreground service up-front (while the app
- * is in the foreground — Android 12+ forbids starting it from the background) and
- * stops it when done. Throws on the offline gate (detect with isOfflineError).
+ * Feeds the Android keep-alive notification with "downloading" text + a progress
+ * bar while it runs (via setDownloadProgress), and clears it back to idle when
+ * done. The foreground service itself is owned by the app session (started
+ * natively at launch), so this never tears it down. Throws on the offline gate
+ * (detect with isOfflineError).
  */
 export async function runPredownload(
   titles: string[],
   onStatus: (s: PredownloadStatus) => void,
   onSession: (s: PredownloadSession) => void
 ): Promise<{ cancelled: boolean; job: JobSnapshot | null }> {
-  await invoke("set_download_keepalive", { active: true }).catch(() => {});
+  // Switch the keep-alive notification to "indexing/downloading" right away.
+  setDownloadProgress({
+    manifestDone: 0,
+    manifestTotal: titles.length,
+    manifestActive: true,
+    done: 0,
+    total: 0,
+  });
 
   const gate = new PauseGate();
   let manifestDone = 0;
@@ -176,7 +186,7 @@ export async function runPredownload(
   let manifestActive = true;
   let paused = false;
   let dl: JobSnapshot = { ...ZERO_JOB };
-  const emit = () =>
+  const emit = () => {
     onStatus({
       paused,
       manifestDone,
@@ -189,6 +199,16 @@ export async function runPredownload(
       skipped: dl.skipped,
       bytesPerSec: dl.bytesPerSec,
     });
+    // Mirror both phases into the Android keep-alive notification bar (it shows
+    // the slower of indexing vs downloading).
+    setDownloadProgress({
+      manifestDone,
+      manifestTotal,
+      manifestActive,
+      done: dl.done,
+      total: dl.total,
+    });
+  };
 
   try {
     const bundle = await loadBundle();
@@ -245,7 +265,9 @@ export async function runPredownload(
     unlisten();
     return { cancelled: cancelled || job.status === "cancelled", job };
   } finally {
-    await invoke("set_download_keepalive", { active: false }).catch(() => {});
+    // Back to idle/reading text — the service itself stays alive (it belongs to
+    // the app session, not this download).
+    setDownloadProgress(null);
   }
 }
 

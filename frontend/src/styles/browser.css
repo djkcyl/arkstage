@@ -79,6 +79,24 @@
   color: var(--text-secondary);
   padding: 4px 0;
   font-weight: bold;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chapter-activity {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent, var(--text-primary));
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 8px;
+}
+
+.chapter-label {
+  font-weight: bold;
 }
 
 .story-list {

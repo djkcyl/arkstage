@@ -210,7 +210,7 @@ pub fn run() {
             download::download_status,
             download::download_settings_get,
             download::download_settings_set,
-            download::set_download_keepalive,
+            download::update_keepalive,
             // Network policy
             net::set_allow_online,
             net::get_allow_online,
