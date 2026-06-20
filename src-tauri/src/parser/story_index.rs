@@ -44,40 +44,48 @@ pub fn parse_story_index(html: &str) -> StoryIndex {
                 continue;
             }
 
-            // Determine chapter name from th elements
-            // Pattern: <th>group</th><th>chapter</th><td>links</td>
-            // or: <th>chapter</th><td>links</td> (when group has rowspan)
-            let chapter_name = match ths.len() {
-                0 => "未分类".to_string(),
+            // Resolve the activity/zone label and the chapter's own (leaf) name.
+            // Row layouts seen in the 剧情一览 tables:
+            //   <th rowspan=N>group</th><th>event</th><td>…</td>  ← first row of a rowspan group
+            //   <th>event</th><td>…</td>                          ← later rows of that group
+            //   <th width=120>activity</th><th width=40>主线</th><td>…</td>  ← standalone activity row
+            // We surface the broader label (the group, or the standalone activity)
+            // as `activity_name`, and the specific leaf (event / 主线 / 支线) as `name`.
+            let (activity_name, chapter_name) = match ths.len() {
+                0 => (None, "未分类".to_string()),
                 1 => {
+                    // Continuation row inside a rowspan group: the lone th is the
+                    // event/leaf, and the remembered group is its activity context.
                     let text = ths[0].text().collect::<String>().trim().to_string();
+                    let act = (!current_group.is_empty()).then(|| current_group.clone());
                     if text.is_empty() {
-                        current_group.clone()
+                        (None, current_group.clone())
                     } else {
-                        // Could be either group or chapter depending on context
-                        // If there's a rowspan, it's a group header
-                        if ths[0].value().attr("rowspan").is_some() {
-                            current_group = text.clone();
-                            text
-                        } else {
-                            text
-                        }
+                        (act, text)
                     }
                 }
                 _ => {
-                    // First th is group, subsequent are chapter
-                    let group = ths[0].text().collect::<String>().trim().to_string();
-                    if !group.is_empty() {
-                        current_group = group;
+                    let first = ths[0].text().collect::<String>().trim().to_string();
+                    let last = ths.last().unwrap().text().collect::<String>().trim().to_string();
+                    if ths[0].value().attr("rowspan").is_some() {
+                        // Group header — remember it for the rows it spans.
+                        current_group = first.clone();
+                    } else {
+                        // Standalone activity row: its own first th is the activity,
+                        // so later single-th rows must not inherit a stale group.
+                        current_group.clear();
                     }
-                    let chapter = ths.last().unwrap().text().collect::<String>().trim().to_string();
-                    if chapter.is_empty() {
+                    let act = (!first.is_empty()).then_some(first);
+                    let name = if last.is_empty() {
                         current_group.clone()
                     } else {
-                        chapter
-                    }
+                        last
+                    };
+                    (act, name)
                 }
             };
+            // Don't repeat the activity label when it equals the leaf name.
+            let activity_name = activity_name.filter(|a| *a != chapter_name);
 
             // Extract story links from td
             let td = tds.last().unwrap();
@@ -106,6 +114,7 @@ pub fn parse_story_index(html: &str) -> StoryIndex {
             if !stories.is_empty() {
                 chapters.push(Chapter {
                     name: chapter_name,
+                    activity_name,
                     stories,
                 });
             }
@@ -120,4 +129,62 @@ pub fn parse_story_index(html: &str) -> StoryIndex {
     }
 
     StoryIndex { categories }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Covers the three row layouts in the 剧情一览 tables: a rowspan group header
+    // with its first event, a continuation row inside that group, and a standalone
+    // activity row (width-sized th pair) whose leaf is just 主线/支线.
+    const SAMPLE: &str = r#"
+      <table class="wikitable">
+        <tr><th colspan="3">主线剧情一览</th></tr>
+        <tr>
+          <th width="120px">黑暗时代·上</th>
+          <th width="40px">主线</th>
+          <td><a href="/w/W2G/BEG">序章·上</a></td>
+        </tr>
+      </table>
+      <table class="wikitable">
+        <tr><th colspan="3">活动剧情一览</th></tr>
+        <tr>
+          <th rowspan="2">集成战略</th>
+          <th>刻俄柏的灰蕈迷境</th>
+          <td><a href="/w/Phantom/1">傀影 1</a></td>
+        </tr>
+        <tr>
+          <th>傀影与猩红孤钻</th>
+          <td><a href="/w/Phantom/2">傀影 2</a></td>
+        </tr>
+        <tr>
+          <th width="120px">骑兵与猎人</th>
+          <th width="40px">支线</th>
+          <td><a href="/w/GT/1">骑兵 1</a></td>
+        </tr>
+      </table>
+    "#;
+
+    #[test]
+    fn extracts_activity_names_for_each_layout() {
+        let idx = parse_story_index(SAMPLE);
+        assert_eq!(idx.categories.len(), 2);
+
+        // Standalone activity row: activity = zone, name = 主线/支线.
+        let main = &idx.categories[0].chapters[0];
+        assert_eq!(main.activity_name.as_deref(), Some("黑暗时代·上"));
+        assert_eq!(main.name, "主线");
+
+        let act = &idx.categories[1].chapters;
+        // Rowspan group: the group is the activity, the event is the leaf.
+        assert_eq!(act[0].activity_name.as_deref(), Some("集成战略"));
+        assert_eq!(act[0].name, "刻俄柏的灰蕈迷境");
+        // Continuation row inherits the remembered group as its activity.
+        assert_eq!(act[1].activity_name.as_deref(), Some("集成战略"));
+        assert_eq!(act[1].name, "傀影与猩红孤钻");
+        // Standalone row after a group must NOT inherit the stale group.
+        assert_eq!(act[2].activity_name.as_deref(), Some("骑兵与猎人"));
+        assert_eq!(act[2].name, "支线");
+    }
 }

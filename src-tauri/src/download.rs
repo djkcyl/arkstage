@@ -491,14 +491,29 @@ pub fn download_settings_set(
     crate::net::limiter().set_rate(rate_limit_bps);
 }
 
-/// Start/stop the Android keep-alive foreground service. Called by the frontend
-/// at the *start* of a predownload (while the app is still in the foreground —
-/// Android 12+ forbids starting a foreground service from the background) and
-/// again at the end. Covers both the manifest and download phases. No-op off
+/// Update the Android keep-alive foreground-service notification (content +
+/// progress). Driven by the frontend as the app's state changes (idle, reading,
+/// indexing/downloading). The baseline notification is started natively by
+/// MainActivity; this only refines it. `progress`/`max`/`indeterminate` control
+/// the progress bar (`max <= 0` and not indeterminate ⇒ no bar). No-op off
 /// Android.
 #[tauri::command]
-pub fn set_download_keepalive(active: bool) {
-    crate::android_service::set_active(active);
+pub fn update_keepalive(
+    active: bool,
+    title: Option<String>,
+    text: Option<String>,
+    progress: Option<i32>,
+    max: Option<i32>,
+    indeterminate: Option<bool>,
+) {
+    crate::android_service::update(
+        active,
+        title,
+        text,
+        progress.unwrap_or(-1),
+        max.unwrap_or(0),
+        indeterminate.unwrap_or(false),
+    );
 }
 
 /// Convenience: register the manager in Tauri state (called from setup()).
