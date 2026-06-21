@@ -6,28 +6,55 @@ pub fn media_root(app_data: &Path) -> PathBuf {
     app_data.join("media")
 }
 
-/// Map an absolute CDN URL to a relative store path `{host}/{path}` (query/fragment
-/// dropped), sanitized so it cannot escape the store root. Returns None for
-/// non-http(s) URLs or URLs without at least a host + one path segment.
-pub fn url_to_relpath(url: &str) -> Option<PathBuf> {
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
-    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
-    if rest.is_empty() || rest.starts_with('/') {
+/// Normalize EITHER a full `http(s)://host/path…` URL OR a bare `host/path…` key
+/// into the canonical asset key `{host}/{path}` (query/fragment dropped). This is
+/// the content-addressed store key, the cross-source dedup key, AND the basis for
+/// building per-source fetch URLs — so it must be byte-identical to the old
+/// `url_to_relpath` for ordinary ASCII lowercase-host URLs (the existing on-disk
+/// cache must NOT be orphaned). Returns None for non-http(s)/schemed strings or
+/// inputs without a real domain host + at least one path segment.
+pub(crate) fn canonical_key(s: &str) -> Option<String> {
+    let rest = if let Some(r) = s.strip_prefix("https://").or_else(|| s.strip_prefix("http://")) {
+        r
+    } else if s.contains(':') {
+        // No scheme but a colon → some other scheme (data:/blob:/prts-cdn:/ftp:…).
         return None;
-    }
-    let mut out = PathBuf::new();
-    for seg in rest.split('/') {
+    } else {
+        s
+    };
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+
+    let mut segs: Vec<String> = Vec::new();
+    for raw in rest.split('/') {
+        // Percent-decode once; on error keep the raw segment.
+        let decoded = urlencoding::decode(raw)
+            .map(|c| c.into_owned())
+            .unwrap_or_else(|_| raw.to_string());
+        // A `%2F`/`%5C` that decoded to a separator must not introduce new path
+        // levels (anti-traversal) — collapse them to `_`.
+        let seg = decoded.replace(['/', '\\'], "_");
+        // Skip empties and traversal segments AFTER decoding.
         if seg.is_empty() || seg == "." || seg == ".." {
             continue;
         }
-        out.push(seg);
+        segs.push(seg);
     }
-    if out.components().count() < 2 {
+
+    if segs.len() < 2 {
         return None;
     }
-    Some(out)
+    // Lowercase the host (first) segment only; require it to be a real domain.
+    segs[0] = segs[0].to_lowercase();
+    if !segs[0].contains('.') {
+        return None;
+    }
+    Some(segs.join("/"))
+}
+
+/// Map a URL or bare key to a relative store path `{host}/{path}`, sanitized so it
+/// cannot escape the store root. Returns None for unmappable inputs.
+pub fn url_to_relpath(url: &str) -> Option<PathBuf> {
+    canonical_key(url).map(|k| k.split('/').collect::<PathBuf>())
 }
 
 /// Absolute path inside the media store for a given URL, or None if URL is unmappable.
@@ -74,6 +101,59 @@ mod tests {
     fn rejects_non_http() {
         assert!(url_to_relpath("ftp://x/y").is_none());
         assert!(url_to_relpath("prts-cdn://localhost/a").is_none());
+    }
+
+    #[test]
+    fn http_and_https_yield_the_same_key() {
+        assert_eq!(
+            canonical_key("http://media.prts.wiki/a/b.png"),
+            canonical_key("https://media.prts.wiki/a/b.png")
+        );
+    }
+
+    #[test]
+    fn host_is_lowercased_but_path_case_preserved() {
+        assert_eq!(
+            canonical_key("https://Media.PRTS.Wiki/A/Avg_X.png").unwrap(),
+            "media.prts.wiki/A/Avg_X.png"
+        );
+    }
+
+    #[test]
+    fn percent_encoded_and_literal_traversal_blocked() {
+        // %2e%2e decodes to ".." which is dropped, not used to climb out.
+        assert_eq!(
+            canonical_key("https://media.prts.wiki/a/%2e%2e/b.png").unwrap(),
+            "media.prts.wiki/a/b.png"
+        );
+        assert_eq!(
+            canonical_key("https://media.prts.wiki/a/../b.png").unwrap(),
+            "media.prts.wiki/a/b.png"
+        );
+        // %2F inside a segment must NOT introduce a new path level.
+        assert_eq!(
+            canonical_key("https://media.prts.wiki/a%2Fevil/b.png").unwrap(),
+            "media.prts.wiki/a_evil/b.png"
+        );
+    }
+
+    #[test]
+    fn bare_key_is_accepted() {
+        assert_eq!(
+            canonical_key("media.prts.wiki/a/b.png").unwrap(),
+            "media.prts.wiki/a/b.png"
+        );
+    }
+
+    #[test]
+    fn data_uri_is_rejected() {
+        assert!(canonical_key("data:image/png;base64,xx").is_none());
+    }
+
+    #[test]
+    fn single_segment_or_dotless_host_rejected() {
+        assert!(canonical_key("https://x").is_none()); // single segment
+        assert!(canonical_key("localhost/a/b").is_none()); // dotless host
     }
 
     #[test]

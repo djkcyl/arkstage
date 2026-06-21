@@ -9,6 +9,8 @@ import {
   setDownloadSettings,
   isOfflineError,
 } from "../lib/predownload";
+import { getSource, setSource } from "../lib/source";
+import type { SourceKind } from "../lib/source";
 
 interface CacheStatus {
   story_index_cached: boolean;
@@ -38,6 +40,13 @@ export default function SettingsPage() {
   // Download tuning: concurrency + bandwidth limit (shown in KB/s; 0 = unlimited).
   const [concurrency, setConcurrency] = useState(4);
   const [rateLimitKbps, setRateLimitKbps] = useState(0);
+  // Asset source: jsDelivr mirror (default) vs official prts.wiki (per-file fallback).
+  const [sourceKind, setSourceKind] = useState<SourceKind>("jsd");
+  const [jsdRepo, setJsdRepo] = useState("");
+  const [jsdRef, setJsdRef] = useState("");
+  const [jsdConcurrency, setJsdConcurrency] = useState(8);
+  const [prtsMaxConcurrency, setPrtsMaxConcurrency] = useState(2);
+  const [prtsRateLimitBps, setPrtsRateLimitBps] = useState(5_000_000);
 
   useEffect(() => {
     const saved = localStorage.getItem("prts-nickname");
@@ -51,6 +60,16 @@ export default function SettingsPage() {
         setRateLimitKbps(Math.round(s.rateLimitBps / 1024));
       })
       .catch(() => {});
+    getSource()
+      .then((s) => {
+        setSourceKind(s.kind);
+        setJsdRepo(s.jsdRepo);
+        setJsdRef(s.jsdRef);
+        setJsdConcurrency(s.jsdConcurrency);
+        setPrtsMaxConcurrency(s.prtsMaxConcurrency);
+        setPrtsRateLimitBps(s.prtsRateLimitBps);
+      })
+      .catch(() => {});
   }, []);
 
   const saveDownloadSettings = async (nextConcurrency: number, nextKbps: number) => {
@@ -61,6 +80,49 @@ export default function SettingsPage() {
     try {
       await setDownloadSettings({ concurrency: c, rateLimitBps: kbps * 1024 });
       showMsg(kbps === 0 ? `已保存：并发 ${c}，不限速` : `已保存：并发 ${c}，限速 ${kbps} KB/s`);
+    } catch (e) {
+      showMsg(`保存失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
+    }
+  };
+
+  const saveSourceKind = async (kind: SourceKind) => {
+    setSourceKind(kind);
+    try {
+      await setSource({ kind });
+      showMsg(kind === "jsd" ? "已切换数据源：镜像加速（jsDelivr）" : "已切换数据源：官方源（prts.wiki）");
+    } catch (e) {
+      showMsg(`保存失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
+    }
+  };
+
+  const saveJsdRepo = async () => {
+    const repo = jsdRepo.trim();
+    setJsdRepo(repo);
+    try {
+      await setSource({ jsdRepo: repo });
+      showMsg(`已保存镜像仓库：${repo}`);
+    } catch (e) {
+      showMsg(`保存失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
+    }
+  };
+
+  const saveJsdRef = async () => {
+    const ref = jsdRef.trim();
+    setJsdRef(ref);
+    try {
+      await setSource({ jsdRef: ref });
+      showMsg(`已保存版本/分支：${ref}`);
+    } catch (e) {
+      showMsg(`保存失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
+    }
+  };
+
+  const saveJsdConcurrency = async (next: number) => {
+    const c = Math.max(1, Math.min(16, Math.round(next) || 1));
+    setJsdConcurrency(c);
+    try {
+      await setSource({ jsdConcurrency: c });
+      showMsg(`已保存镜像并发：${c}`);
     } catch (e) {
       showMsg(`保存失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
     }
@@ -261,6 +323,73 @@ export default function SettingsPage() {
           <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
             {allowOnline ? "缺失资源将自动从 PRTS 拉取并缓存" : "仅播放已缓存资源，缺失时提示获取"}
           </span>
+        </div>
+      </div>
+
+      {/* Asset source */}
+      <div className="setting-group">
+        <label>数据源</label>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+          <button
+            className="nav-btn"
+            onClick={() => saveSourceKind("jsd")}
+            style={sourceKind === "jsd" ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+          >
+            镜像加速（jsDelivr）
+          </button>
+          <button
+            className="nav-btn"
+            onClick={() => saveSourceKind("prts")}
+            style={sourceKind === "prts" ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+          >
+            官方源（prts.wiki）
+          </button>
+        </div>
+        <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginTop: "8px" }}>
+          默认走镜像，缺失的文件按单文件回退官方源
+        </div>
+        {sourceKind === "jsd" && (
+          <div
+            style={{ display: "flex", gap: "16px", flexWrap: "wrap", alignItems: "center", marginTop: "12px" }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <span style={{ fontSize: "13px" }}>镜像仓库</span>
+              <input
+                type="text"
+                value={jsdRepo}
+                placeholder="djkcyl/arkstage-assets"
+                style={{ width: "200px" }}
+                onChange={(e) => setJsdRepo(e.target.value)}
+                onBlur={saveJsdRepo}
+              />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <span style={{ fontSize: "13px" }}>版本/分支</span>
+              <input
+                type="text"
+                value={jsdRef}
+                placeholder="main"
+                style={{ width: "120px" }}
+                onChange={(e) => setJsdRef(e.target.value)}
+                onBlur={saveJsdRef}
+              />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <span style={{ fontSize: "13px" }}>镜像并发</span>
+              <input
+                type="number"
+                min={1}
+                max={16}
+                value={jsdConcurrency}
+                style={{ width: "72px" }}
+                onChange={(e) => setJsdConcurrency(Number(e.target.value))}
+                onBlur={() => saveJsdConcurrency(jsdConcurrency)}
+              />
+            </div>
+          </div>
+        )}
+        <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginTop: "12px" }}>
+          官方源限速：≤{prtsMaxConcurrency} 并发 · ≤{(prtsRateLimitBps / 1e6).toFixed(0)} MB/s
         </div>
       </div>
 

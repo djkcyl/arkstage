@@ -24,8 +24,9 @@ use std::time::Instant;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager as _};
 
-/// Default number of concurrent workers per job. Configurable at runtime (D2).
-const DEFAULT_CONCURRENCY: usize = 4;
+/// Default number of concurrent workers per job (jsd default). Configurable at
+/// runtime (D2).
+const DEFAULT_CONCURRENCY: usize = 8;
 /// Minimum gap between progress events for one job, to avoid event storms.
 const PROGRESS_THROTTLE_MS: u128 = 150;
 /// How long a worker waits when the queue is momentarily empty but the producer
@@ -105,7 +106,9 @@ struct Job {
     closed: AtomicBool,
     active_workers: AtomicUsize,
     pending: Mutex<VecDeque<String>>,
-    /// URLs ever enqueued, for cross-story dedup as manifests stream in.
+    /// Canonical keys ever enqueued, for cross-story dedup as manifests stream in.
+    /// Keying off the canonical key (not the raw URL) collapses http/https/case
+    /// variants of the same asset to a single download.
     seen: Mutex<HashSet<String>>,
     speed: Mutex<Speed>,
 }
@@ -166,7 +169,11 @@ impl Job {
         let mut seen = self.seen.lock().unwrap();
         let mut added = 0u32;
         for u in urls {
-            if seen.insert(u.clone()) {
+            // Dedup by canonical key so http/https/case-variant duplicates of the
+            // same asset collapse to one download; unmappable strings (canonical
+            // None) fall back to the raw string as their own dedup identity.
+            let key = crate::media::canonical_key(&u).unwrap_or_else(|| u.clone());
+            if seen.insert(key) {
                 pending.push_back(u);
                 added += 1;
             }
@@ -231,7 +238,13 @@ impl Manager {
         job.enqueue(initial);
         self.jobs.lock().unwrap().insert(id, job.clone());
 
-        let workers = self.concurrency.load(Ordering::Relaxed).max(1);
+        // prts is hard-capped at its fixed concurrency; jsd uses the configurable
+        // worker count (driven by the download_settings commands).
+        let workers = if crate::source::current().kind == crate::source::SourceKind::Prts {
+            crate::source::PRTS_MAX_CONCURRENCY
+        } else {
+            self.concurrency.load(Ordering::Relaxed).max(1)
+        };
         job.active_workers.store(workers, Ordering::Relaxed);
 
         let root = Arc::new(crate::media::media_root(&crate::data_root::data_root()));
@@ -332,25 +345,30 @@ async fn worker(job: Arc<Job>, root: Arc<std::path::PathBuf>, sink: Arc<dyn Prog
             }
         };
 
-        // Already in the content-addressed store, or not a downloadable URL.
-        match crate::media::store_path(&root, &url) {
-            Some(p) if p.exists() => {
-                job.skipped.fetch_add(1, Ordering::Relaxed);
-                finish_item(&job, &*sink);
-                continue;
-            }
+        // Normalize to the canonical key. Unmappable strings (data:/blob:/relative
+        // paths the engine emits while enumerating a manifest) are not real assets
+        // and NOT failures — count them as skipped so they never show up as a
+        // phantom "1 failed".
+        let key = match crate::media::canonical_key(&url) {
+            Some(k) => k,
             None => {
-                // Unmappable URL (data:/blob:/relative path the engine emits while
-                // enumerating a manifest). It's not a real asset and NOT a failure —
-                // count it as skipped so it never shows up as a phantom "1 failed".
                 job.skipped.fetch_add(1, Ordering::Relaxed);
                 finish_item(&job, &*sink);
                 continue;
             }
-            _ => {}
+        };
+
+        // Already in the content-addressed store (store_path on the canonical key
+        // is idempotent, so it matches whether the input was a URL or a bare key).
+        if let Some(p) = crate::media::store_path(&root, &key) {
+            if p.exists() {
+                job.skipped.fetch_add(1, Ordering::Relaxed);
+                finish_item(&job, &*sink);
+                continue;
+            }
         }
 
-        match fetch_with_retry(client, &url, &root, &job).await {
+        match fetch_item(client, &key, &root, &job).await {
             Ok(()) => {
                 job.success.fetch_add(1, Ordering::Relaxed);
             }
@@ -376,13 +394,50 @@ async fn worker(job: Arc<Job>, root: Arc<std::path::PathBuf>, sink: Arc<dyn Prog
     }
 }
 
-/// Stream a URL into the media store, metering bytes through the global limiter.
-async fn fetch_to_store(
+/// Source-aware fetch of one canonical key into the store. Under jsd we try the
+/// jsd mirror first; on failure (and if not cancelled) we fall back PER FILE to
+/// prts — which is throttled by the global prts gate + limiter. Under prts we go
+/// straight to the (throttled) prts fetch.
+async fn fetch_item(
     client: &reqwest::Client,
-    url: &str,
+    key: &str,
     root: &std::path::Path,
     job: &Job,
 ) -> Result<(), String> {
+    let cfg = crate::source::current();
+    if cfg.kind == crate::source::SourceKind::Jsd {
+        let url = crate::source::fetch_url(crate::source::SourceKind::Jsd, key, &cfg);
+        if fetch_with_retry(client, &url, key, root, job, false).await.is_ok() {
+            return Ok(());
+        }
+        if job.cancelled.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        // fall through to the per-file prts fallback (throttled).
+    }
+    let purl = crate::source::fetch_url(crate::source::SourceKind::Prts, key, &cfg);
+    fetch_with_retry(client, &purl, key, root, job, true).await
+}
+
+/// Stream a URL into the media store under `key`, metering bytes through the global
+/// limiter. When `is_prts`, additionally hold a prts concurrency permit across the
+/// whole request and meter every chunk through the prts bandwidth limiter too.
+async fn fetch_to_store(
+    client: &reqwest::Client,
+    url: &str,
+    key: &str,
+    root: &std::path::Path,
+    job: &Job,
+    is_prts: bool,
+) -> Result<(), String> {
+    // Hold a prts permit for the WHOLE request+body so concurrent prts fetches
+    // never exceed the cap (kept alive until this scope ends).
+    let _permit = if is_prts {
+        Some(crate::source::prts_gate().acquire().await.unwrap())
+    } else {
+        None
+    };
+
     let mut resp = client
         .get(url)
         .header("Referer", "https://prts.wiki/")
@@ -395,16 +450,22 @@ async fn fetch_to_store(
 
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
-        // Bandwidth limit: consume quota before accepting the chunk.
-        crate::net::limiter().acquire(chunk.len() as u64).await;
-        job.bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        let len = chunk.len() as u64;
+        // User's global bandwidth cap (always applies).
+        crate::net::limiter().acquire(len).await;
+        // prts-only: also meter through the fixed prts bandwidth limiter.
+        if is_prts {
+            crate::source::prts_limiter().acquire(len).await;
+        }
+        job.bytes.fetch_add(len, Ordering::Relaxed);
         buf.extend_from_slice(&chunk);
         // Abort mid-file on cancel so big files don't hold the job open.
         if job.cancelled.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
     }
-    crate::media::write_local(root, url, &buf)
+    // Store under the canonical key, not the source-specific fetch URL.
+    crate::media::write_local(root, key, &buf)
 }
 
 /// Max attempts per URL. Auto-retrying transient failures means a flaky network
@@ -418,8 +479,10 @@ const MAX_ATTEMPTS: u32 = 6;
 async fn fetch_with_retry(
     client: &reqwest::Client,
     url: &str,
+    key: &str,
     root: &std::path::Path,
     job: &Job,
+    is_prts: bool,
 ) -> Result<(), String> {
     let mut attempt = 0u32;
     loop {
@@ -427,7 +490,7 @@ async fn fetch_with_retry(
         if job.cancelled.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
-        match fetch_to_store(client, url, root, job).await {
+        match fetch_to_store(client, url, key, root, job, is_prts).await {
             Ok(()) => return Ok(()),
             Err(e) => {
                 if job.cancelled.load(Ordering::Relaxed)
@@ -695,6 +758,30 @@ mod tests {
         assert_eq!(s.total, 7);
         assert_eq!(s.skipped, 7);
         assert_eq!(s.done, 7);
+    }
+
+    #[tokio::test]
+    async fn precached_canonical_keys_are_skipped() {
+        // Items are enqueued as bare canonical keys while their store entries were
+        // written via the `https://` URL form — exercises the canonical-key
+        // store-path match across key vs URL form (no network needed).
+        let pid = std::process::id();
+        let keys: Vec<String> = (0..3)
+            .map(|i| format!("media.prts.wiki/canon{pid}/{i}/f.png"))
+            .collect();
+        for k in &keys {
+            // Precreate via the https URL form; canonical_key collapses both forms.
+            let root = crate::media::media_root(&crate::data_root::data_root());
+            crate::media::write_local(&root, &format!("https://{k}"), b"x").unwrap();
+        }
+        let m = Manager::new(Arc::new(NoopSink));
+        let id = m.start(keys);
+        m.close(id);
+        let s = wait_terminal(&m, id).await;
+        assert_eq!(s.status, Status::Completed);
+        assert_eq!(s.total, 3);
+        assert_eq!(s.skipped, 3);
+        assert_eq!(s.done, 3);
     }
 
     #[tokio::test]
