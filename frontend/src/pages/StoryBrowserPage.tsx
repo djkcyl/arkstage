@@ -1,79 +1,147 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useStoryIndex } from "../hooks/useStoryIndex";
 import { useDownload } from "../lib/DownloadContext";
+import { getSource } from "../lib/source";
+import type { SourceConfig } from "../lib/source";
+import { coverUrl } from "../lib/cover";
+import { buildShelves } from "../lib/bookshelf";
+import type { Book, Shelf } from "../lib/bookshelf";
+import CoverCard from "../components/CoverCard";
+import ChapterDetail from "../components/ChapterDetail";
+import SelectionBar from "../components/SelectionBar";
 
+/**
+ * Cinematic ebook bookshelf. Categories become shelf sections; chapters sharing
+ * a cover key collapse into one CoverCard ("book"). Clicking a card drills into
+ * an in-page ChapterDetail (no route push, so hardware-back stays here). A
+ * persistent SelectionBar drives batch download/delete over selected stories.
+ */
 export default function StoryBrowserPage() {
   const { index, loading, error, refresh } = useStoryIndex();
   const [search, setSearch] = useState("");
-  const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
   const [cachedStories, setCachedStories] = useState<Set<string>>(new Set());
-  const { start: startPredownload, busy, onFinished } = useDownload();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [openBook, setOpenBook] = useState<Book | null>(null);
+  const [source, setSource] = useState<SourceConfig | null>(null);
+  const { start: startPredownload, busy, status, onFinished } = useDownload();
   const navigate = useNavigate();
 
-  const refreshCached = () =>
-    invoke<string[]>("list_cached_stories")
-      .then((list) => setCachedStories(new Set(list)))
-      .catch(() => {});
+  const refreshCached = useCallback(
+    () =>
+      invoke<string[]>("list_cached_stories")
+        .then((list) => setCachedStories(new Set(list)))
+        .catch(() => {}),
+    []
+  );
 
   // Load cached story list, and refresh it whenever a (global) download finishes.
   useEffect(() => {
     refreshCached();
     return onFinished(refreshCached);
-  }, [onFinished]);
+  }, [onFinished, refreshCached]);
 
-  const filteredIndex = useMemo(() => {
-    if (!index || !search.trim()) return index;
+  // Resolve the asset source once so we can build cover URLs.
+  useEffect(() => {
+    getSource()
+      .then(setSource)
+      .catch(() => {});
+  }, []);
+
+  const urlFor = useCallback(
+    (coverKey: string): string | null => (source ? coverUrl(source, coverKey) : null),
+    [source]
+  );
+
+  // All shelves, then filtered by the search query (matches book title /
+  // chapter / activity / story title / page_title).
+  const shelves: Shelf[] = useMemo(() => (index ? buildShelves(index) : []), [index]);
+
+  const filtered: Shelf[] = useMemo(() => {
     const q = search.trim().toLowerCase();
+    if (!q) return shelves;
+    return shelves
+      .map((shelf) => ({
+        category: shelf.category,
+        books: shelf.books.filter((b) => {
+          if (b.coverKey.toLowerCase().includes(q) || b.category.toLowerCase().includes(q)) {
+            return true;
+          }
+          return b.chapters.some(
+            (ch) =>
+              ch.name.toLowerCase().includes(q) ||
+              (ch.activity_name?.toLowerCase().includes(q) ?? false) ||
+              ch.stories.some(
+                (s) =>
+                  s.title.toLowerCase().includes(q) || s.page_title.toLowerCase().includes(q)
+              )
+          );
+        }),
+      }))
+      .filter((shelf) => shelf.books.length > 0);
+  }, [shelves, search]);
 
-    return {
-      categories: index.categories
-        .map((cat) => ({
-          ...cat,
-          chapters: cat.chapters
-            .map((ch) => {
-              // Matching the activity/chapter name keeps all of its stories.
-              const chapterMatch =
-                ch.name.toLowerCase().includes(q) ||
-                (ch.activity_name?.toLowerCase().includes(q) ?? false);
-              return {
-                ...ch,
-                stories: chapterMatch
-                  ? ch.stories
-                  : ch.stories.filter(
-                      (s) =>
-                        s.title.toLowerCase().includes(q) ||
-                        s.page_title.toLowerCase().includes(q)
-                    ),
-              };
-            })
-            .filter((ch) => ch.stories.length > 0),
-        }))
-        .filter((cat) => cat.chapters.length > 0),
-    };
-  }, [index, search]);
+  // Keep the drilled-in book in sync with a refreshed index (same coverKey).
+  const liveBook: Book | null = useMemo(() => {
+    if (!openBook) return null;
+    for (const shelf of shelves) {
+      const found = shelf.books.find(
+        (b) => b.category === openBook.category && b.coverKey === openBook.coverKey
+      );
+      if (found) return found;
+    }
+    return openBook;
+  }, [openBook, shelves]);
 
-  const toggleCategory = (name: string) => {
-    setOpenCategories((prev) => ({ ...prev, [name]: !prev[name] }));
+  // ----- selection helpers -----
+  const toggleStory = (pt: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(pt)) next.delete(pt);
+      else next.add(pt);
+      return next;
+    });
+
+  const setMany = (pts: string[], on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const pt of pts) {
+        if (on) next.add(pt);
+        else next.delete(pt);
+      }
+      return next;
+    });
+
+  const toggleBook = (book: Book) => {
+    const allSel = book.pageTitles.every((pt) => selected.has(pt));
+    setMany(book.pageTitles, !allSel);
   };
 
-  const isCached = (pageTitle: string): boolean => {
-    const key = `stories_${pageTitle.replace(/\//g, "_")}`;
-    return cachedStories.has(key);
+  const bookSelState = (book: Book): { selected: boolean; partial: boolean } => {
+    const sel = book.pageTitles.filter((pt) => selected.has(pt)).length;
+    return { selected: sel === book.pageTitles.length && sel > 0, partial: sel > 0 };
   };
 
-  const playStory = (pageTitle: string) => {
-    navigate(`/play/${encodeURIComponent(pageTitle)}`);
+  const clearSelection = () => setSelected(new Set());
+
+  const selectAllVisible = () => {
+    const all: string[] = [];
+    if (liveBook) all.push(...liveBook.pageTitles);
+    else for (const shelf of filtered) for (const b of shelf.books) all.push(...b.pageTitles);
+    setSelected(new Set(all));
   };
+
+  // ----- play / download / delete -----
+  const playStory = (pageTitle: string) => navigate(`/play/${encodeURIComponent(pageTitle)}`);
 
   const fmtSize = (b: number): string =>
     b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`;
 
-  // Delete just this chapter/category's cache (media + scripts). The backend only
-  // removes assets exclusive to these stories, so other cached chapters are safe.
-  const deleteCache = async (titles: string[], label: string) => {
-    if (busy) return;
+  // Delete a set of stories' cache. The backend only removes assets exclusive to
+  // these stories, so other cached chapters stay intact.
+  const deleteTitles = async (titles: string[], label: string, after?: () => void) => {
+    if (titles.length === 0) return;
     if (!confirm(`确认删除「${label}」的本地缓存？\n（仅删除其独有的资源，与其他章节共享的不受影响）`)) return;
     try {
       const r = await invoke<{ freedBytes: number; deletedFiles: number; storiesCleared: number }>(
@@ -82,10 +150,18 @@ export default function StoryBrowserPage() {
       );
       alert(`已清理「${label}」：${r.storiesCleared} 个剧情，释放 ${fmtSize(r.freedBytes)}`);
       refreshCached();
+      after?.();
     } catch (e) {
       alert(`删除失败：${e instanceof Error ? e.message : String(e)}`);
     }
   };
+
+  const downloadBook = (book: Book) => startPredownload(book.pageTitles);
+  const deleteBook = (book: Book) => deleteTitles(book.pageTitles, book.coverKey);
+
+  const batchDownload = () => startPredownload([...selected]);
+  const batchDelete = () =>
+    deleteTitles([...selected], `${selected.size} 个剧情`, clearSelection);
 
   if (loading && !index) {
     return <div className="loading">正在加载剧情目录...</div>;
@@ -104,111 +180,82 @@ export default function StoryBrowserPage() {
 
   return (
     <div className="browser-page story-browser">
-      <div className="browser-header">
-        <button className="nav-btn" onClick={() => navigate("/")}>◀</button>
-        <h1>剧情一览</h1>
-        <input
-          className="search-input"
-          type="text"
-          placeholder="搜索剧情..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <button className="nav-btn" onClick={refresh} title="刷新">↻</button>
-      </div>
-
-      <div className="browser-content">
-        {filteredIndex?.categories.map((cat) => (
-          <div key={cat.name} className="category">
-            <div
-              className="category-header"
-              onClick={() => toggleCategory(cat.name)}
-            >
-              <span className={`arrow ${openCategories[cat.name] !== false ? "open" : ""}`}>
-                ▶
-              </span>
-              {cat.name}
-              <span style={{ fontSize: "13px", color: "var(--text-secondary)", marginLeft: "auto" }}>
-                {cat.chapters.reduce((n, ch) => n + ch.stories.length, 0)} 个剧情
-              </span>
-              <button
-                className="nav-btn"
-                style={{ marginLeft: "12px", fontSize: "12px" }}
-                disabled={busy}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  startPredownload(cat.chapters.flatMap((ch) => ch.stories.map((s) => s.page_title)));
-                }}
-                title="预下载本分类全部资源"
-              >
-                ⬇ 预下载
-              </button>
-              <button
-                className="nav-btn"
-                style={{ marginLeft: "8px", fontSize: "12px" }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  deleteCache(
-                    cat.chapters.flatMap((ch) => ch.stories.map((s) => s.page_title)),
-                    cat.name
-                  );
-                }}
-                title="删除本分类缓存"
-              >
-                🗑
-              </button>
-            </div>
-
-            {openCategories[cat.name] !== false && (
-              <div>
-                {cat.chapters.map((ch, ci) => (
-                  <div key={ci} className="chapter">
-                    <div className="chapter-name">
-                      {ch.activity_name && (
-                        <span className="chapter-activity">{ch.activity_name}</span>
-                      )}
-                      <span className="chapter-label">{ch.name}</span>
-                      <button
-                        className="nav-btn"
-                        style={{ marginLeft: "10px", fontSize: "11px" }}
-                        disabled={busy}
-                        onClick={() => startPredownload(ch.stories.map((s) => s.page_title))}
-                        title="预下载本章资源"
-                      >
-                        ⬇
-                      </button>
-                      <button
-                        className="nav-btn"
-                        style={{ marginLeft: "6px", fontSize: "11px" }}
-                        onClick={() => deleteCache(ch.stories.map((s) => s.page_title), ch.name)}
-                        title="删除本章缓存"
-                      >
-                        🗑
-                      </button>
-                    </div>
-                    <div className="story-list">
-                      {ch.stories.map((story, si) => (
-                        <span
-                          key={si}
-                          className={`story-link ${isCached(story.page_title) ? "cached" : ""}`}
-                          onClick={() => playStory(story.page_title)}
-                          title={story.page_title}
-                        >
-                          {story.title}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+      {!liveBook && (
+        <>
+          <div className="browser-header">
+            <button className="nav-btn" onClick={() => navigate("/")}>
+              ◀
+            </button>
+            <h1>剧情书架</h1>
+            <input
+              className="search-input"
+              type="text"
+              placeholder="搜索书目 / 剧情..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <button className="nav-btn" onClick={refresh} title="刷新">
+              ↻
+            </button>
           </div>
-        ))}
 
-        {filteredIndex?.categories.length === 0 && (
-          <div className="loading">未找到剧情</div>
-        )}
-      </div>
+          <div className="browser-content shelf-content">
+            {filtered.map((shelf) => (
+              <section key={shelf.category} className="shelf">
+                <div className="shelf-header">
+                  <span className="shelf-title">{shelf.category}</span>
+                  <span className="shelf-count">{shelf.books.length} 本</span>
+                </div>
+                <div className="cover-grid">
+                  {shelf.books.map((book) => {
+                    const st = bookSelState(book);
+                    return (
+                      <CoverCard
+                        key={book.coverKey}
+                        book={book}
+                        coverUrl={urlFor(book.coverKey)}
+                        cachedStories={cachedStories}
+                        selected={st.selected}
+                        partial={st.partial && !st.selected}
+                        onOpen={setOpenBook}
+                        onToggleSelect={toggleBook}
+                      />
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
+
+            {filtered.length === 0 && <div className="loading">未找到剧情</div>}
+          </div>
+        </>
+      )}
+
+      {liveBook && (
+        <ChapterDetail
+          book={liveBook}
+          coverUrl={urlFor(liveBook.coverKey)}
+          cachedStories={cachedStories}
+          selected={selected}
+          busy={busy}
+          onBack={() => setOpenBook(null)}
+          onPlay={playStory}
+          onToggleStory={toggleStory}
+          onSetMany={setMany}
+          onDownloadBook={downloadBook}
+          onDeleteBook={deleteBook}
+        />
+      )}
+
+      <SelectionBar
+        count={selected.size}
+        busy={busy}
+        downloadActive={status !== null}
+        onSelectAll={selectAllVisible}
+        onClear={clearSelection}
+        onDownload={batchDownload}
+        onDelete={batchDelete}
+      />
       {/* Progress is rendered globally by <DownloadBar> so it survives navigation. */}
     </div>
   );

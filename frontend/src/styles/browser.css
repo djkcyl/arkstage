@@ -270,3 +270,553 @@
 .btn-danger:hover {
   background: #d32f2f;
 }
+
+/* =========================================================================
+   Cinematic ebook bookshelf
+   ========================================================================= */
+
+.shelf-content {
+  /* Extra bottom room so the last shelf clears the SelectionBar/DownloadBar. */
+  padding: 20px 24px calc(40px + var(--safe-bottom));
+}
+
+.shelf {
+  margin-bottom: 36px;
+}
+
+.shelf-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  position: relative;
+}
+
+.shelf-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 56px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+}
+
+.shelf-title {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-primary);
+}
+
+.shelf-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.cover-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 18px;
+}
+
+@media (max-width: 560px) {
+  .cover-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+  }
+  .shelf-content {
+    padding: 16px 16px calc(40px + var(--safe-bottom));
+  }
+}
+
+/* ----- Cover card ----- */
+.cover-card {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #000;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--border);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.cover-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.65);
+  border-color: var(--accent);
+}
+
+.cover-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent), 0 10px 26px rgba(0, 0, 0, 0.6);
+}
+
+.cover-art {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+}
+
+.cover-img,
+.hero-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Filmic darkening so overlaid title typography always stays legible. */
+.cover-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+      180deg,
+      rgba(0, 0, 0, 0.05) 0%,
+      rgba(0, 0, 0, 0) 38%,
+      rgba(0, 0, 0, 0.55) 78%,
+      rgba(0, 0, 0, 0.82) 100%
+    ),
+    radial-gradient(120% 120% at 50% 0%, transparent 55%, rgba(0, 0, 0, 0.4) 100%);
+  pointer-events: none;
+}
+
+.cover-meta {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 12px;
+  pointer-events: none;
+}
+
+.cover-title {
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.15;
+  color: #fff;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
+  letter-spacing: 0.01em;
+}
+
+.cover-sub {
+  margin-top: 4px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+}
+
+/* Card-level select checkbox (top-left). */
+.cover-check {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1.5px solid rgba(255, 255, 255, 0.55);
+  color: #000;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(2px);
+  transition: all 0.15s;
+}
+
+.cover-check.on,
+.cover-check.partial {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+}
+
+.cover-check.partial {
+  background: rgba(244, 196, 48, 0.55);
+}
+
+/* Cached indicator (top-right pill). */
+.cover-cached {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(2px);
+}
+
+.cover-cached.done {
+  color: #000;
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.cover-dim {
+  color: var(--text-secondary);
+}
+
+/* Tiny conic progress ring for partial cache. */
+.cover-ring {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent) var(--p, 0%), rgba(255, 255, 255, 0.18) 0);
+}
+
+/* =========================================================================
+   Chapter detail (drill-in)
+   ========================================================================= */
+
+.chapter-detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.detail-hero {
+  position: relative;
+  flex-shrink: 0;
+  min-height: 240px;
+  padding: calc(16px + var(--safe-top)) 24px 22px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+
+.hero-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0.35) 0%,
+    rgba(0, 0, 0, 0.15) 35%,
+    rgba(0, 0, 0, 0.6) 75%,
+    var(--bg-primary) 100%
+  );
+  pointer-events: none;
+}
+
+.hero-back {
+  position: absolute;
+  top: calc(12px + var(--safe-top));
+  left: 16px;
+  z-index: 2;
+}
+
+.hero-meta {
+  position: relative;
+  z-index: 1;
+}
+
+.hero-cat {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.hero-title {
+  font-size: 30px;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 3px 16px rgba(0, 0, 0, 0.85);
+  line-height: 1.1;
+}
+
+.hero-sub {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.hero-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.detail-body {
+  flex: 1;
+  padding: 8px 24px calc(48px + var(--safe-bottom));
+}
+
+@media (max-width: 560px) {
+  .detail-hero {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .hero-title {
+    font-size: 24px;
+  }
+  .detail-body {
+    padding: 8px 16px calc(48px + var(--safe-bottom));
+  }
+}
+
+.detail-chapter {
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0;
+}
+
+.dc-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dc-title {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 700;
+  text-align: left;
+  padding: 4px 0;
+}
+
+.dc-title .arrow {
+  font-size: 11px;
+  color: var(--accent);
+  transition: transform 0.2s;
+}
+
+.dc-title .arrow.open {
+  transform: rotate(90deg);
+}
+
+.dc-count {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+
+/* Checkbox shared shape (card / chapter / story). */
+.dc-check,
+.dc-scheck {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  border: 1.5px solid var(--border);
+  color: #000;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.dc-scheck {
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+}
+
+.dc-check.on,
+.dc-check.partial,
+.dc-scheck.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.dc-check.partial {
+  background: rgba(244, 196, 48, 0.5);
+}
+
+/* Range picker. */
+.range-select {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px 32px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.range-label {
+  font-size: 12px;
+}
+
+.range-select select {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+  max-width: 160px;
+}
+
+.range-dash {
+  color: var(--text-secondary);
+}
+
+.dc-stories {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px 0 4px 32px;
+}
+
+.dc-story {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+
+.dc-story:hover {
+  background: var(--bg-secondary);
+}
+
+.dc-story.sel {
+  background: rgba(244, 196, 48, 0.08);
+}
+
+.dc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.dc-dot.cached {
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(244, 196, 48, 0.7);
+}
+
+.dc-stitle {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.dc-stitle:hover {
+  color: var(--accent);
+}
+
+/* =========================================================================
+   Selection bar (persistent batch actions)
+   ========================================================================= */
+
+.selection-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px calc(10px + var(--safe-bottom));
+  background: rgba(18, 18, 18, 0.96);
+  border-top: 1px solid var(--accent);
+  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+}
+
+/* When a download bar is showing, lift above it (its bar is ~2 thin rows). */
+.selection-bar.above-download {
+  bottom: 56px;
+}
+
+.sel-count {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.sel-count strong {
+  color: var(--accent);
+  font-size: 15px;
+}
+
+.sel-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.sel-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 13px;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.sel-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.sel-btn.primary {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.sel-btn.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.sel-btn.danger {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.sel-btn.danger:hover {
+  background: var(--error);
+  color: #fff;
+}
+
+.sel-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 560px) {
+  .selection-bar {
+    gap: 8px;
+    padding: 8px 12px calc(8px + var(--safe-bottom));
+  }
+  .sel-btn {
+    padding: 6px 9px;
+    font-size: 12px;
+  }
+}
