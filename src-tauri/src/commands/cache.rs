@@ -159,6 +159,18 @@ fn dir_size(path: &PathBuf) -> u64 {
 }
 
 /// Sanitize a string for use as a filename.
+/// Filesystem path of a story's cached manifest (the captured asset-URL list), or
+/// None if the data root is unavailable. Mirrors the frontend key
+/// `manifest_<title with / → _>` (sanitize_filename also maps `/`→`_`, so applying
+/// it to `manifest_<title>` yields the identical name). Used by the Rust-side
+/// cached-manifest feeder so the download can be driven without the WebView.
+pub(crate) fn manifest_cache_path(title: &str) -> std::path::PathBuf {
+    let name = sanitize_filename(&format!("manifest_{title}"));
+    crate::data_root::data_root()
+        .join("cache")
+        .join(format!("{name}.json"))
+}
+
 fn sanitize_filename(s: &str) -> String {
     s.chars()
         .map(|c| match c {

@@ -203,6 +203,7 @@ pub fn run() {
             // Managed bulk downloads
             download::download_start,
             download::download_add,
+            download::download_feed_cached,
             download::download_close,
             download::download_pause,
             download::download_resume,

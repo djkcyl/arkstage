@@ -159,6 +159,31 @@ const MANIFEST_CONCURRENCY = 4;
  */
 const MANIFEST_INDEX_ROUNDS = 4;
 
+// Screen Wake Lock — keep the screen on (so the WebView renderer stays active and
+// the indexing phase keeps running) while the user has the app open and sets the
+// phone down. The lock auto-releases when the page is hidden, so we re-acquire on
+// visibility. Best-effort: unsupported/denied just no-ops. Doesn't help once the
+// app is fully backgrounded (that's what PHASE-1 Rust cached-feeding is for).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let screenWakeLock: any = null;
+async function acquireScreenWake(): Promise<void> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const wl = (navigator as any).wakeLock;
+    if (wl && !screenWakeLock) screenWakeLock = await wl.request("screen");
+  } catch {
+    screenWakeLock = null;
+  }
+}
+function releaseScreenWake(): void {
+  try {
+    void screenWakeLock?.release();
+  } catch {
+    /* ignore */
+  }
+  screenWakeLock = null;
+}
+
 const ZERO_JOB: JobSnapshot = {
   id: 0,
   status: "running",
@@ -215,6 +240,12 @@ export async function runPredownload(
     setManifestProgress(manifestDone, manifestTotal, manifestActive);
   };
 
+  // Keep the screen awake for the duration (re-acquire when the app becomes
+  // visible again, since the lock drops while hidden).
+  const onVisible = () => { if (document.visibilityState === "visible") void acquireScreenWake(); };
+  document.addEventListener("visibilitychange", onVisible);
+  await acquireScreenWake();
+
   try {
     const bundle = await loadBundle();
     // Cache the engine deps once up-front (via Rust) so the parallel iframe boots
@@ -242,43 +273,52 @@ export async function runPredownload(
     });
     emit();
 
-    // Index phase — capture each story's manifest and stream its URLs into the live
-    // job. Booting the engine per story (in a hidden iframe) is the slow part, so a
-    // POOL of captures runs concurrently (overlapping each story's script fetch with
-    // the previous one's parsing). Downloads start the instant the first URLs land,
-    // so indexing and downloading still run concurrently overall.
-    //
-    // A story whose capture fails is RETRIED in a later round rather than silently
-    // dropped: indexing runs in the WebView, which Android throttles/freezes while
-    // the app is backgrounded, so a capture can fail mid-flight. Without retry the
-    // job would close early and the download would look "complete" while missing
-    // that story's assets — exactly the "下载提前停止/不全" symptom on a backgrounded
-    // device. Retrying naturally waits for the app to return to the foreground.
     let cancelled = false;
     let offlineErr: unknown = null;
-    const doneIdx = new Set<number>();
 
-    const indexOne = async (i: number): Promise<boolean> => {
+    // PHASE 1 (Rust, background-proof): feed every ALREADY-cached manifest straight
+    // from the cache files into the job — no WebView involved, so these keep
+    // downloading even when the app is fully backgrounded (Home/screen-off), which
+    // is when aggressive ROMs freeze the WebView renderer. Returns the titles that
+    // still need WebView engine indexing.
+    let pending: string[];
+    try {
+      pending = await invoke<string[]>("download_feed_cached", { jobId, titles });
+    } catch {
+      pending = [...titles];
+    }
+    const cachedCount = titles.length - pending.length;
+    let indexed = 0; // uncached stories newly indexed this run
+    manifestDone = cachedCount;
+    emit();
+
+    // PHASE 2 (WebView): index the remaining uncached stories. Booting the engine
+    // per story (hidden iframe) MUST run in the foreground WebView — the screen wake
+    // lock above keeps it alive while the phone is set down. A POOL runs
+    // concurrently; failures are RETRIED (not dropped) so a momentary background
+    // throttle doesn't close the job early with missing assets — it resumes on
+    // return to the foreground.
+    const indexOne = async (title: string): Promise<boolean> => {
       try {
-        const urls = (await manifestForStory(bundle, titles[i]))
+        const urls = (await manifestForStory(bundle, title))
           // Only real http(s) assets are downloadable; drop data:/blob:/relative
           // URLs the engine emits so they never inflate the total or look failed.
           .filter((u) => /^https?:\/\//i.test(u));
         await invoke("download_add", { jobId, urls });
-        doneIdx.add(i);
-        manifestDone = doneIdx.size;
+        indexed++;
+        manifestDone = cachedCount + indexed;
         emit();
         return true;
       } catch (e) {
         if (isOfflineError(e)) { offlineErr = e; return false; }
-        console.warn("manifest failed for", titles[i], e);
+        console.warn("manifest failed for", title, e);
         return false;
       }
     };
 
-    // One concurrent pass over `items`; returns the indices that failed this pass.
-    const runPass = async (items: number[]): Promise<number[]> => {
-      const failed: number[] = [];
+    // One concurrent pass over `items` (titles); returns the ones that failed.
+    const runPass = async (items: string[]): Promise<string[]> => {
+      const failed: string[] = [];
       let next = 0;
       const worker = async (): Promise<void> => {
         for (;;) {
@@ -297,8 +337,8 @@ export async function runPredownload(
       return failed;
     };
 
-    let pending = titles.map((_, i) => i);
     for (let round = 0; round < MANIFEST_INDEX_ROUNDS; round++) {
+      if (!pending.length) break;
       pending = await runPass(pending);
       if (!pending.length || gate.cancelled || offlineErr) break;
       // Backoff before retrying. If the app is backgrounded (renderer throttled),
@@ -326,6 +366,8 @@ export async function runPredownload(
     unlisten();
     return { cancelled: cancelled || job.status === "cancelled", job };
   } finally {
+    document.removeEventListener("visibilitychange", onVisible);
+    releaseScreenWake();
     // Indexing is over; clear its counts. The engine clears the download state on
     // the job's terminal snapshot, which drops the service to "reading" or stops it.
     setManifestProgress(0, 0, false);

@@ -514,6 +514,38 @@ pub fn download_add(job_id: u64, urls: Vec<String>, state: tauri::State<'_, Mana
     state.add(job_id, urls);
 }
 
+/// Feed already-cached story manifests into the live job ENTIRELY in Rust (read the
+/// `manifest_<title>.json` files, stream their http(s) URLs to the worker pool) and
+/// return the titles that have NO cached manifest yet. Those still need the WebView
+/// engine to index them; everything fed here downloads without the WebView, so the
+/// bulk of a (re)download keeps running in the background — where aggressive ROMs
+/// (ColorOS/MIUI) freeze the WebView renderer the per-story indexing depends on.
+#[tauri::command]
+pub fn download_feed_cached(
+    job_id: u64,
+    titles: Vec<String>,
+    state: tauri::State<'_, Manager>,
+) -> Vec<String> {
+    let mut uncached = Vec::new();
+    for title in titles {
+        let path = crate::commands::cache::manifest_cache_path(&title);
+        match std::fs::read_to_string(&path) {
+            Ok(s) => match serde_json::from_str::<Vec<String>>(&s) {
+                Ok(urls) => {
+                    let urls: Vec<String> = urls
+                        .into_iter()
+                        .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+                        .collect();
+                    state.add(job_id, urls);
+                }
+                Err(_) => uncached.push(title), // corrupt cache → re-index
+            },
+            Err(_) => uncached.push(title), // not cached yet
+        }
+    }
+    uncached
+}
+
 #[tauri::command]
 pub fn download_close(job_id: u64, state: tauri::State<'_, Manager>) {
     state.close(job_id);
