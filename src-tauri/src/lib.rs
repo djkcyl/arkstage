@@ -196,6 +196,7 @@ pub fn run() {
             cache::list_cached_stories,
             cache::get_cache_status,
             cache::clear_cache,
+            cache::delete_chapter_cache,
             // Asset management
             assets::download_asset,
             assets::get_asset_path,

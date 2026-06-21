@@ -67,6 +67,26 @@ export default function StoryBrowserPage() {
     navigate(`/play/${encodeURIComponent(pageTitle)}`);
   };
 
+  const fmtSize = (b: number): string =>
+    b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`;
+
+  // Delete just this chapter/category's cache (media + scripts). The backend only
+  // removes assets exclusive to these stories, so other cached chapters are safe.
+  const deleteCache = async (titles: string[], label: string) => {
+    if (busy) return;
+    if (!confirm(`确认删除「${label}」的本地缓存？\n（仅删除其独有的资源，与其他章节共享的不受影响）`)) return;
+    try {
+      const r = await invoke<{ freedBytes: number; deletedFiles: number; storiesCleared: number }>(
+        "delete_chapter_cache",
+        { titles }
+      );
+      alert(`已清理「${label}」：${r.storiesCleared} 个剧情，释放 ${fmtSize(r.freedBytes)}`);
+      refreshCached();
+    } catch (e) {
+      alert(`删除失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   if (loading && !index) {
     return <div className="loading">正在加载剧情目录...</div>;
   }
@@ -123,6 +143,20 @@ export default function StoryBrowserPage() {
               >
                 ⬇ 预下载
               </button>
+              <button
+                className="nav-btn"
+                style={{ marginLeft: "8px", fontSize: "12px" }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteCache(
+                    cat.chapters.flatMap((ch) => ch.stories.map((s) => s.page_title)),
+                    cat.name
+                  );
+                }}
+                title="删除本分类缓存"
+              >
+                🗑
+              </button>
             </div>
 
             {openCategories[cat.name] !== false && (
@@ -142,6 +176,14 @@ export default function StoryBrowserPage() {
                         title="预下载本章资源"
                       >
                         ⬇
+                      </button>
+                      <button
+                        className="nav-btn"
+                        style={{ marginLeft: "6px", fontSize: "11px" }}
+                        onClick={() => deleteCache(ch.stories.map((s) => s.page_title), ch.name)}
+                        title="删除本章缓存"
+                      >
+                        🗑
                       </button>
                     </div>
                     <div className="story-list">

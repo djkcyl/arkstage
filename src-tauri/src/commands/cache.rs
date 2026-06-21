@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::models::CacheStatus;
 
@@ -137,6 +137,93 @@ pub async fn clear_cache() -> Result<(), String> {
     Ok(())
 }
 
+/// Result of a per-chapter cache deletion.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteResult {
+    pub freed_bytes: u64,
+    pub deleted_files: u64,
+    pub stories_cleared: u64,
+}
+
+/// Delete the cache for a specific set of stories (a chapter/category) instead of
+/// everything. Because the media store is content-addressed and DEDUPED across
+/// stories, this only removes media assets used EXCLUSIVELY by the given stories —
+/// anything still referenced by another cached story is kept, so deleting one
+/// chapter never breaks another. Also removes those stories' per-story cache files
+/// (manifest + script).
+#[tauri::command]
+pub async fn delete_chapter_cache(titles: Vec<String>) -> Result<DeleteResult, String> {
+    Ok(delete_chapter_cache_in(&crate::data_root::data_root(), &titles))
+}
+
+/// Core of [`delete_chapter_cache`], parameterized on the data root for testing.
+fn delete_chapter_cache_in(root: &Path, titles: &[String]) -> DeleteResult {
+    use std::collections::HashSet;
+
+    let cache = root.join("cache");
+    let media_root = crate::media::media_root(root);
+
+    // Manifest filenames of the stories being deleted.
+    let del_keys: HashSet<String> = titles.iter().map(|t| manifest_filename(t)).collect();
+
+    // Partition every cached manifest's URLs: ones belonging to the deleted stories
+    // vs. ones still referenced by stories we're keeping (so shared assets survive).
+    let mut del_urls: HashSet<String> = HashSet::new();
+    let mut keep_urls: HashSet<String> = HashSet::new();
+    if let Ok(entries) = std::fs::read_dir(&cache) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !(name.starts_with("manifest_") && name.ends_with(".json")) {
+                continue;
+            }
+            let Ok(s) = std::fs::read_to_string(entry.path()) else { continue };
+            let Ok(urls) = serde_json::from_str::<Vec<String>>(&s) else { continue };
+            let target = if del_keys.contains(&name) { &mut del_urls } else { &mut keep_urls };
+            target.extend(urls);
+        }
+    }
+
+    let mut freed: u64 = 0;
+    let mut deleted_files: u64 = 0;
+
+    // Remove media assets exclusive to the deleted stories.
+    for url in del_urls.difference(&keep_urls) {
+        if let Some(p) = crate::media::store_path(&media_root, url) {
+            if let Ok(meta) = std::fs::metadata(&p) {
+                if meta.is_file() {
+                    let len = meta.len();
+                    if std::fs::remove_file(&p).is_ok() {
+                        freed += len;
+                        deleted_files += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Remove the per-story cache files (manifest + script) for the deleted stories.
+    let mut stories_cleared: u64 = 0;
+    for t in titles {
+        let mut any = false;
+        for f in [manifest_filename(t), story_filename(t)] {
+            let path = cache.join(f);
+            if let Ok(meta) = std::fs::metadata(&path) {
+                freed += meta.len();
+                if std::fs::remove_file(&path).is_ok() {
+                    deleted_files += 1;
+                    any = true;
+                }
+            }
+        }
+        if any {
+            stories_cleared += 1;
+        }
+    }
+
+    DeleteResult { freed_bytes: freed, deleted_files, stories_cleared }
+}
+
 fn dir_size(path: &PathBuf) -> u64 {
     if !path.exists() {
         return 0;
@@ -165,10 +252,17 @@ fn dir_size(path: &PathBuf) -> u64 {
 /// it to `manifest_<title>` yields the identical name). Used by the Rust-side
 /// cached-manifest feeder so the download can be driven without the WebView.
 pub(crate) fn manifest_cache_path(title: &str) -> std::path::PathBuf {
-    let name = sanitize_filename(&format!("manifest_{title}"));
     crate::data_root::data_root()
         .join("cache")
-        .join(format!("{name}.json"))
+        .join(manifest_filename(title))
+}
+
+/// Cache filename (`<sanitized>.json`) for a story's captured manifest / script.
+fn manifest_filename(title: &str) -> String {
+    format!("{}.json", sanitize_filename(&format!("manifest_{title}")))
+}
+fn story_filename(title: &str) -> String {
+    format!("{}.json", sanitize_filename(&format!("stories_{title}")))
 }
 
 fn sanitize_filename(s: &str) -> String {
@@ -201,5 +295,43 @@ mod tests {
             vec!["stories_W2G_BEG".to_string(), "stories_W2G_END".to_string()]
         );
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn delete_chapter_keeps_shared_assets() {
+        // Two stories: A and B share `shared.png`; A also has `onlyA.png`, B `onlyB.png`.
+        // Deleting A must remove onlyA (exclusive) but KEEP shared (still used by B)
+        // and onlyB — and remove A's manifest/script files only.
+        let root = std::env::temp_dir().join(format!("prts_del_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let cache = root.join("cache");
+        let media = crate::media::media_root(&root);
+        fs::create_dir_all(&cache).unwrap();
+
+        let shared = "https://media.prts.wiki/a/aa/shared.png";
+        let only_a = "https://media.prts.wiki/b/bb/onlyA.png";
+        let only_b = "https://media.prts.wiki/c/cc/onlyB.png";
+        for u in [shared, only_a, only_b] {
+            crate::media::write_local(&media, u, b"x").unwrap();
+        }
+        fs::write(cache.join(manifest_filename("Ch/A")), serde_json::to_string(&[shared, only_a]).unwrap()).unwrap();
+        fs::write(cache.join(story_filename("Ch/A")), "{}").unwrap();
+        fs::write(cache.join(manifest_filename("Ch/B")), serde_json::to_string(&[shared, only_b]).unwrap()).unwrap();
+        fs::write(cache.join(story_filename("Ch/B")), "{}").unwrap();
+
+        let r = delete_chapter_cache_in(&root, &["Ch/A".to_string()]);
+
+        // onlyA media gone; shared + onlyB kept.
+        assert!(crate::media::store_path(&media, only_a).unwrap().exists() == false);
+        assert!(crate::media::store_path(&media, shared).unwrap().exists());
+        assert!(crate::media::store_path(&media, only_b).unwrap().exists());
+        // A's cache files gone; B's kept.
+        assert!(!cache.join(manifest_filename("Ch/A")).exists());
+        assert!(!cache.join(story_filename("Ch/A")).exists());
+        assert!(cache.join(manifest_filename("Ch/B")).exists());
+        // 1 media (onlyA) + 2 cache files removed, 1 story cleared.
+        assert_eq!(r.deleted_files, 3);
+        assert_eq!(r.stories_cleared, 1);
+        let _ = fs::remove_dir_all(&root);
     }
 }
