@@ -122,7 +122,7 @@ async function buildIndex() {
 function allStoryTitles(index) {
   const titles = [];
   for (const cat of index.categories)
-    for (const ch of cat.chapters) for (const s of ch.stories) titles.push(s.pageTitle);
+    for (const ch of cat.chapters) for (const s of ch.stories) titles.push(s.page_title);
   return titles;
 }
 
