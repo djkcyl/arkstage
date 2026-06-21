@@ -59,8 +59,9 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     try {
       const { cancelled, job } = await runPredownload(titles, setStatus, setSession);
       const verb = cancelled ? "已取消" : "完成";
+      // Failures are auto-retried and not reported; show new vs. already-cached.
       const tail = job
-        ? `：资源 ${job.total} 个，成功 ${job.success}，跳过 ${job.skipped}，失败 ${job.failed}`
+        ? `：共 ${job.total} 个资源，新下载 ${job.success} 个，已缓存 ${job.skipped} 个`
         : "";
       alert(`预下载${verb}${tail}`);
       finishedListeners.current.forEach((f) => f());

@@ -10,6 +10,17 @@ fn cache_dir() -> Result<PathBuf, String> {
     Ok(cache_dir)
 }
 
+/// Every on-disk location the app caches into, under the data root:
+///   - `cache/`  — story scripts, the index, manifests (small JSON)
+///   - `assets/` — engine deps + font
+///   - `media/`  — the content-addressed store of downloaded images/audio (the big one)
+/// The displayed "cache size" and "clear all" must cover ALL of these, not just
+/// `cache/` — otherwise the size reads ~20 MB while `media/` holds gigabytes.
+fn all_cache_roots() -> Vec<PathBuf> {
+    let root = crate::data_root::data_root();
+    vec![root.join("cache"), root.join("assets"), root.join("media")]
+}
+
 /// Save JSON data to a cache file.
 #[tauri::command]
 pub async fn save_to_cache(
@@ -98,7 +109,9 @@ pub async fn get_cache_status() -> Result<CacheStatus, String> {
     let story_index_cached = dir.join("story-index.json").exists();
     let asset_db_cached = dir.join("asset-databases.json").exists();
     let cached_stories = list_story_keys(&dir);
-    let total_size_bytes = dir_size(&dir);
+    // Sum cache/ + assets/ + media/ so the figure matches real disk usage (the
+    // downloaded media store is by far the largest part).
+    let total_size_bytes = all_cache_roots().iter().map(dir_size).sum();
 
     Ok(CacheStatus {
         story_index_cached,
@@ -108,16 +121,19 @@ pub async fn get_cache_status() -> Result<CacheStatus, String> {
     })
 }
 
-/// Clear all cached data.
+/// Clear ALL cached data — story cache, engine assets, AND the downloaded media
+/// store (so "清除所有缓存" actually frees the gigabytes the media store holds, not
+/// just the small JSON cache).
 #[tauri::command]
 pub async fn clear_cache() -> Result<(), String> {
-    let dir = cache_dir()?;
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir)
-            .map_err(|e| format!("Failed to clear cache: {}", e))?;
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("Failed to recreate cache dir: {}", e))?;
+    for dir in all_cache_roots() {
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir)
+                .map_err(|e| format!("Failed to clear {}: {}", dir.display(), e))?;
+        }
     }
+    // Recreate the cache dir so subsequent writes don't race on a missing parent.
+    cache_dir()?;
     Ok(())
 }
 

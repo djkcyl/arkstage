@@ -39,10 +39,18 @@ export interface FrameBootResult {
   manifest?: string[];
 }
 
-// External engine resources: remote URL + local cache filename.
+// External engine resources: remote URL + local cache filename. A `bundled` path
+// (relative to the app origin) means a copy ships INSIDE the app and is used
+// directly — see EXTERNALS.jquery.
 export const EXTERNALS = {
   css: { url: "https://static.prts.wiki/assets/scenario/arknights-scenario.css", filename: "arknights-scenario.css" },
-  jquery: { url: "https://code.jquery.com/jquery-3.7.1.min.js", filename: "jquery.min.js" },
+  // jQuery is bundled in the app (frontend/public/vendor): code.jquery.com is the
+  // ONLY engine dep not on the prts.wiki CDN, and it's unreachable in some regions
+  // (notably mainland China) and on emulators with broken Chromium TLS. Loading it
+  // from the CDN made every manifest capture throw "dep load failed: …jquery…", so
+  // indexing produced no URLs and nothing downloaded. Bundling it = always offline,
+  // always fast, no network at all.
+  jquery: { url: "https://code.jquery.com/jquery-3.7.1.min.js", filename: "jquery.min.js", bundled: "vendor/jquery.min.js" },
   preloadjs: { url: "https://static.prts.wiki/npm/PreloadJS@1.0.1/preloadjs.min.js", filename: "preloadjs.min.js" },
   toolbox: { url: "https://static.prts.wiki/assets/scenario/krliov.toolbox.js", filename: "krliov.toolbox.js" },
   font: { url: "https://static.prts.wiki/assets/scenario/fonts/NotoSans.ttf", filename: "NotoSans.ttf" },
@@ -351,8 +359,25 @@ async function ensureFontCached(): Promise<string> {
   }
 }
 
-/** Resolve an engine dep to a local asset:// URL if cached, else a proxy URL. */
-export async function resolveAssetUrl(ext: { url: string; filename: string }): Promise<string> {
+/**
+ * Resolve an engine dep (jQuery/PreloadJS/toolbox) to a local `asset://` URL,
+ * downloading it through Rust (rustls) and caching it on first use.
+ *
+ * Why download via Rust instead of letting the WebView fetch it: jQuery lives on
+ * `code.jquery.com`, which `proxyUrl` does NOT rewrite (only wiki CDNs are), so it
+ * would be loaded straight by the WebView. That fails wherever the WebView can't
+ * reach/secure that host — e.g. an emulator whose Chromium TLS is broken, or a
+ * region where code.jquery.com is blocked/slow — which made EVERY manifest capture
+ * throw "dep load failed: …jquery…", so indexing produced zero URLs and nothing
+ * downloaded. Caching via Rust also makes deps work offline and load instantly from
+ * disk on every subsequent iframe boot (a big speed-up for the parallel indexing).
+ */
+export async function resolveAssetUrl(ext: { url: string; filename: string; bundled?: string }): Promise<string> {
+  // A copy shipped inside the app wins outright — no network, no cache, works
+  // offline, and immune to a blocked/slow CDN (this is how jQuery loads).
+  if (ext.bundled) {
+    return new URL(ext.bundled, `${window.location.origin}/`).href;
+  }
   try {
     const localPath = await invoke<string | null>("get_asset_path", {
       category: "engine",
@@ -360,9 +385,33 @@ export async function resolveAssetUrl(ext: { url: string; filename: string }): P
     });
     if (localPath) return convertFileSrc(localPath);
   } catch {
-    // fall through
+    // fall through to download
   }
-  return proxyUrl(ext.url);
+  try {
+    const localPath = await invoke<string>("download_asset", {
+      url: ext.url,
+      category: "engine",
+      filename: ext.filename,
+    });
+    return convertFileSrc(localPath);
+  } catch {
+    // Last resort: a proxy URL (rewrites wiki CDNs; code.jquery.com stays raw and
+    // may still fail, but at least wiki-hosted deps keep working).
+    return proxyUrl(ext.url);
+  }
+}
+
+/**
+ * Pre-fetch+cache the engine deps needed for manifest capture ONCE, before the
+ * parallel index pool spins up — so the concurrent iframe boots all load them from
+ * disk instead of each racing to download the same files over the network.
+ */
+export async function prewarmEngineDeps(): Promise<void> {
+  await Promise.all(
+    [EXTERNALS.jquery, EXTERNALS.preloadjs, EXTERNALS.toolbox].map((d) =>
+      resolveAssetUrl(d).catch(() => undefined)
+    )
+  );
 }
 
 /** Append a <script src> to a document and resolve when it loads. */

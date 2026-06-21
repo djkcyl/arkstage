@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { bootEngineInFrame } from "./engineBoot";
+import { bootEngineInFrame, prewarmEngineDeps } from "./engineBoot";
 import type { WidgetBundle } from "./engineBoot";
-import { setDownloadProgress } from "./keepalive";
+import { setManifestProgress } from "./keepalive";
 
 /**
  * Predownload status. Indexing (manifest) and downloading run CONCURRENTLY now
@@ -142,6 +142,23 @@ class PauseGate {
   }
 }
 
+/**
+ * How many story manifests to capture concurrently. Each capture boots the engine
+ * in its own hidden iframe (independent realms), so several can run at once; this
+ * overlaps the (network-bound) script fetches with the (CPU-bound) engine parsing
+ * and is the main speed-up for the indexing phase. Kept modest so several heavy
+ * engine iframes don't exhaust memory on low-end phones.
+ */
+const MANIFEST_CONCURRENCY = 4;
+
+/**
+ * How many passes to retry stories whose manifest capture failed before giving up.
+ * Failures are usually transient (the WebView renderer was throttled/frozen while
+ * backgrounded); retrying keeps the job from closing early with missing assets.
+ * Bounded so a genuinely broken story can't loop forever.
+ */
+const MANIFEST_INDEX_ROUNDS = 4;
+
 const ZERO_JOB: JobSnapshot = {
   id: 0,
   status: "running",
@@ -160,25 +177,19 @@ const ZERO_JOB: JobSnapshot = {
  * to the job so indexing and downloading run CONCURRENTLY. Reports both phases'
  * progress via `onStatus` (two bars) and exposes one pause/cancel `onSession`.
  *
- * Feeds the Android keep-alive notification with "downloading" text + a progress
- * bar while it runs (via setDownloadProgress), and clears it back to idle when
- * done. The foreground service itself is owned by the app session (started
- * natively at launch), so this never tears it down. Throws on the offline gate
- * (detect with isOfflineError).
+ * Brings up the Android keep-alive foreground service with "downloading" text + a
+ * progress bar while it runs (via setDownloadProgress), and clears it (`null`) when
+ * done — which tears the service/notification down unless a story is being read.
+ * Throws on the offline gate (detect with isOfflineError).
  */
 export async function runPredownload(
   titles: string[],
   onStatus: (s: PredownloadStatus) => void,
   onSession: (s: PredownloadSession) => void
 ): Promise<{ cancelled: boolean; job: JobSnapshot | null }> {
-  // Switch the keep-alive notification to "indexing/downloading" right away.
-  setDownloadProgress({
-    manifestDone: 0,
-    manifestTotal: titles.length,
-    manifestActive: true,
-    done: 0,
-    total: 0,
-  });
+  // Tell the native keep-alive about indexing right away (download counts come
+  // from the Rust engine; the FGS itself is started by the download_start command).
+  setManifestProgress(0, titles.length, true);
 
   const gate = new PauseGate();
   let manifestDone = 0;
@@ -199,19 +210,16 @@ export async function runPredownload(
       skipped: dl.skipped,
       bytesPerSec: dl.bytesPerSec,
     });
-    // Mirror both phases into the Android keep-alive notification bar (it shows
-    // the slower of indexing vs downloading).
-    setDownloadProgress({
-      manifestDone,
-      manifestTotal,
-      manifestActive,
-      done: dl.done,
-      total: dl.total,
-    });
+    // Mirror only the indexing counts to the native keep-alive; the download
+    // numbers + the notification itself are driven by the Rust engine.
+    setManifestProgress(manifestDone, manifestTotal, manifestActive);
   };
 
   try {
     const bundle = await loadBundle();
+    // Cache the engine deps once up-front (via Rust) so the parallel iframe boots
+    // below all load jQuery/PreloadJS/toolbox from disk instead of the network.
+    await prewarmEngineDeps();
     // Open a streaming job (foreground → keep-alive start is allowed).
     const jobId = await invoke<number>("download_start", { urls: [] });
 
@@ -234,22 +242,75 @@ export async function runPredownload(
     });
     emit();
 
-    // Index loop — capture each manifest and stream its URLs into the live job.
+    // Index phase — capture each story's manifest and stream its URLs into the live
+    // job. Booting the engine per story (in a hidden iframe) is the slow part, so a
+    // POOL of captures runs concurrently (overlapping each story's script fetch with
+    // the previous one's parsing). Downloads start the instant the first URLs land,
+    // so indexing and downloading still run concurrently overall.
+    //
+    // A story whose capture fails is RETRIED in a later round rather than silently
+    // dropped: indexing runs in the WebView, which Android throttles/freezes while
+    // the app is backgrounded, so a capture can fail mid-flight. Without retry the
+    // job would close early and the download would look "complete" while missing
+    // that story's assets — exactly the "下载提前停止/不全" symptom on a backgrounded
+    // device. Retrying naturally waits for the app to return to the foreground.
     let cancelled = false;
-    for (let i = 0; i < titles.length; i++) {
-      await gate.wait();
-      if (gate.cancelled) { cancelled = true; break; }
-      manifestDone = i;
-      emit();
+    let offlineErr: unknown = null;
+    const doneIdx = new Set<number>();
+
+    const indexOne = async (i: number): Promise<boolean> => {
       try {
-        const urls = await manifestForStory(bundle, titles[i]);
+        const urls = (await manifestForStory(bundle, titles[i]))
+          // Only real http(s) assets are downloadable; drop data:/blob:/relative
+          // URLs the engine emits so they never inflate the total or look failed.
+          .filter((u) => /^https?:\/\//i.test(u));
         await invoke("download_add", { jobId, urls });
+        doneIdx.add(i);
+        manifestDone = doneIdx.size;
+        emit();
+        return true;
       } catch (e) {
-        if (isOfflineError(e)) { unlisten(); throw e; }
+        if (isOfflineError(e)) { offlineErr = e; return false; }
         console.warn("manifest failed for", titles[i], e);
+        return false;
       }
+    };
+
+    // One concurrent pass over `items`; returns the indices that failed this pass.
+    const runPass = async (items: number[]): Promise<number[]> => {
+      const failed: number[] = [];
+      let next = 0;
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          await gate.wait();
+          if (gate.cancelled) { cancelled = true; return; }
+          if (offlineErr) return;
+          const k = next++;
+          if (k >= items.length) return;
+          const ok = await indexOne(items[k]);
+          if (!ok && !gate.cancelled && !offlineErr) failed.push(items[k]);
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(MANIFEST_CONCURRENCY, items.length) }, worker)
+      );
+      return failed;
+    };
+
+    let pending = titles.map((_, i) => i);
+    for (let round = 0; round < MANIFEST_INDEX_ROUNDS; round++) {
+      pending = await runPass(pending);
+      if (!pending.length || gate.cancelled || offlineErr) break;
+      // Backoff before retrying. If the app is backgrounded (renderer throttled),
+      // the awaited work below simply doesn't progress until it's foreground again.
+      await new Promise((r) => setTimeout(r, 1500));
     }
-    manifestDone = titles.length;
+    if (offlineErr) { unlisten(); throw offlineErr; }
+    if (pending.length) {
+      console.warn(
+        `predownload: ${pending.length}/${titles.length} stories could not be indexed after ${MANIFEST_INDEX_ROUNDS} rounds`
+      );
+    }
     manifestActive = false;
     emit();
 
@@ -265,9 +326,9 @@ export async function runPredownload(
     unlisten();
     return { cancelled: cancelled || job.status === "cancelled", job };
   } finally {
-    // Back to idle/reading text — the service itself stays alive (it belongs to
-    // the app session, not this download).
-    setDownloadProgress(null);
+    // Indexing is over; clear its counts. The engine clears the download state on
+    // the job's terminal snapshot, which drops the service to "reading" or stops it.
+    setManifestProgress(0, 0, false);
   }
 }
 

@@ -56,8 +56,9 @@ export default function DownloadBar() {
   const pct = (d: number, t: number) => (t > 0 ? (d / t) * 100 : 0);
   const prefix = status.paused ? "已暂停·" : "";
   const idxLabel = `${prefix}索引 ${status.manifestDone}/${status.manifestTotal}`;
-  const dlExtra =
-    (status.skipped > 0 ? ` 跳过${status.skipped}` : "") + (status.failed > 0 ? ` 失败${status.failed}` : "");
+  // Failures are auto-retried in the background and never surfaced — show only
+  // the "already cached" (skipped) count alongside progress.
+  const dlExtra = status.skipped > 0 ? ` 跳过${status.skipped}` : "";
   const dlLabel = `${prefix}下载 ${status.done}/${status.total}${dlExtra}`;
 
   return (

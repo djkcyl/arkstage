@@ -40,11 +40,20 @@ pub trait ProgressSink: Send + Sync {
     fn emit(&self, snap: &Snapshot);
 }
 
-/// Production sink: forward each snapshot as a `download://progress` Tauri event.
+/// Production sink: forward each snapshot as a `download://progress` Tauri event,
+/// AND drive the Android keep-alive notification straight from here. The latter is
+/// what lets download progress keep advancing (and the FGS stay refreshed) even
+/// when the WebView renderer is frozen in the background — the previous design
+/// routed progress through the WebView, which aggressive ROMs (ColorOS, MIUI…)
+/// freeze, making the download look stopped.
 struct AppHandleSink(AppHandle);
 impl ProgressSink for AppHandleSink {
     fn emit(&self, snap: &Snapshot) {
         let _ = self.0.emit(PROGRESS_EVENT, snap);
+        // A running/paused job keeps the service alive; a terminal one releases it
+        // (back to "reading" or idle, decided in android_service).
+        let active = matches!(snap.status, Status::Running | Status::Paused);
+        crate::android_service::set_download(active, snap.done, snap.total);
     }
 }
 
@@ -323,7 +332,7 @@ async fn worker(job: Arc<Job>, root: Arc<std::path::PathBuf>, sink: Arc<dyn Prog
             }
         };
 
-        // Already in the content-addressed store, or unmappable URL.
+        // Already in the content-addressed store, or not a downloadable URL.
         match crate::media::store_path(&root, &url) {
             Some(p) if p.exists() => {
                 job.skipped.fetch_add(1, Ordering::Relaxed);
@@ -331,18 +340,24 @@ async fn worker(job: Arc<Job>, root: Arc<std::path::PathBuf>, sink: Arc<dyn Prog
                 continue;
             }
             None => {
-                job.failed.fetch_add(1, Ordering::Relaxed);
+                // Unmappable URL (data:/blob:/relative path the engine emits while
+                // enumerating a manifest). It's not a real asset and NOT a failure —
+                // count it as skipped so it never shows up as a phantom "1 failed".
+                job.skipped.fetch_add(1, Ordering::Relaxed);
                 finish_item(&job, &*sink);
                 continue;
             }
             _ => {}
         }
 
-        match fetch_to_store(client, &url, &root, &job).await {
+        match fetch_with_retry(client, &url, &root, &job).await {
             Ok(()) => {
                 job.success.fetch_add(1, Ordering::Relaxed);
             }
             Err(_) => {
+                // Exhausted retries (or a permanent 4xx). Tracked internally for
+                // diagnostics but never surfaced — auto-retry already gave it
+                // several attempts, so we don't alarm the user with a failure count.
                 job.failed.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -390,6 +405,53 @@ async fn fetch_to_store(
         }
     }
     crate::media::write_local(root, url, &buf)
+}
+
+/// Max attempts per URL. Auto-retrying transient failures means a flaky network
+/// (or a backgrounded device briefly losing connectivity) never surfaces as a
+/// "failed download" — the worker keeps trying until the asset lands.
+const MAX_ATTEMPTS: u32 = 6;
+
+/// Fetch a URL into the store, retrying transient failures with capped
+/// exponential backoff. Stops early on cancellation or a permanent error
+/// (HTTP 4xx other than 429); network/timeout/5xx errors are retried.
+async fn fetch_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+    root: &std::path::Path,
+    job: &Job,
+) -> Result<(), String> {
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        if job.cancelled.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        match fetch_to_store(client, url, root, job).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                if job.cancelled.load(Ordering::Relaxed)
+                    || attempt >= MAX_ATTEMPTS
+                    || is_permanent(&e)
+                {
+                    return Err(e);
+                }
+                // Backoff 200ms, 400, 800, … capped at 3s; wake early on cancel.
+                let backoff_ms = (200u64.saturating_mul(1u64 << (attempt - 1))).min(3000);
+                let mut waited = 0u64;
+                while waited < backoff_ms && !job.cancelled.load(Ordering::Relaxed) {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    waited += 100;
+                }
+            }
+        }
+    }
+}
+
+/// A permanent failure not worth retrying: an HTTP 4xx response other than 429
+/// (Too Many Requests is transient). Connection/timeout/5xx errors are retried.
+fn is_permanent(err: &str) -> bool {
+    err.starts_with("HTTP 4") && !err.starts_with("HTTP 429")
 }
 
 /// Bump the done counter and emit a throttled progress event.
@@ -440,6 +502,10 @@ pub fn download_start(
 ) -> Result<u64, String> {
     // Offline gate: don't even start a bulk download when networking is off.
     crate::net::ensure_online()?;
+    // Start the keep-alive foreground service NOW, from this (foreground) command —
+    // Android 12+ forbids starting an FGS from the background, and the first engine
+    // progress emit could land after the user has already backgrounded the app.
+    crate::android_service::set_download(true, 0, 0);
     Ok(state.start(urls))
 }
 
@@ -491,29 +557,20 @@ pub fn download_settings_set(
     crate::net::limiter().set_rate(rate_limit_bps);
 }
 
-/// Update the Android keep-alive foreground-service notification (content +
-/// progress). Driven by the frontend as the app's state changes (idle, reading,
-/// indexing/downloading). The baseline notification is started natively by
-/// MainActivity; this only refines it. `progress`/`max`/`indeterminate` control
-/// the progress bar (`max <= 0` and not indeterminate ⇒ no bar). No-op off
-/// Android.
+/// Frontend → Android keep-alive: report the "reading a story" (playback) state.
+/// Download progress is driven natively by the engine (see `AppHandleSink`); this
+/// only covers what the WebView alone knows. No-op off Android.
 #[tauri::command]
-pub fn update_keepalive(
-    active: bool,
-    title: Option<String>,
-    text: Option<String>,
-    progress: Option<i32>,
-    max: Option<i32>,
-    indeterminate: Option<bool>,
-) {
-    crate::android_service::update(
-        active,
-        title,
-        text,
-        progress.unwrap_or(-1),
-        max.unwrap_or(0),
-        indeterminate.unwrap_or(false),
-    );
+pub fn keepalive_set_reading(reading: bool) {
+    crate::android_service::set_reading(reading);
+}
+
+/// Frontend → Android keep-alive: report indexing (manifest) progress, the one
+/// piece the native download engine can't see. Folded into the download
+/// notification's text while `active`. No-op off Android.
+#[tauri::command]
+pub fn keepalive_set_manifest(done: u32, total: u32, active: bool) {
+    crate::android_service::set_manifest(done, total, active);
 }
 
 /// Convenience: register the manager in Tauri state (called from setup()).
@@ -609,14 +666,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unmappable_urls_count_as_failed_without_network() {
+    async fn unmappable_urls_count_as_skipped_not_failed() {
+        // data:/blob:/single-segment URLs the engine emits are unmappable; they
+        // must NOT count as failures (that was the phantom "1 failed" bug).
         let m = Manager::new(Arc::new(NoopSink));
         let id = m.start(vec!["https://x".into(), "not a url".into()]);
         m.close(id);
         let s = wait_terminal(&m, id).await;
         assert_eq!(s.status, Status::Completed);
-        assert_eq!(s.failed, 2);
+        assert_eq!(s.failed, 0);
+        assert_eq!(s.skipped, 2);
         assert_eq!(s.done, 2);
+    }
+
+    #[test]
+    fn is_permanent_only_for_4xx_except_429() {
+        assert!(is_permanent("HTTP 404 Not Found"));
+        assert!(is_permanent("HTTP 403 Forbidden"));
+        assert!(!is_permanent("HTTP 429 Too Many Requests"));
+        assert!(!is_permanent("HTTP 500 Internal Server Error"));
+        assert!(!is_permanent("error sending request for url")); // network error
     }
 
     #[tokio::test]

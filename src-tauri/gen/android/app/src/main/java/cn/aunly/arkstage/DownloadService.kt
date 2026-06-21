@@ -10,16 +10,17 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 
 /**
- * Foreground service that keeps the app process alive for the whole session, so
- * Android's background limits don't freeze/kill the Rust workers (downloads,
- * caching). Started natively by [MainActivity] right after launch and refined by
- * the frontend via Rust (see android_service.rs) as the app's state changes.
- * Posts an ongoing notification (required for a foreground service, and the
- * user-visible keep-alive indicator) whose title/text/progress come from the
- * start Intent's extras.
+ * Foreground service that keeps the app process alive WHILE downloading or playing,
+ * so Android's background limits don't freeze/kill the Rust workers. Started, refined
+ * and stopped on demand by the frontend via Rust (see android_service.rs) — it does
+ * NOT run while the app is idle, so there's no permanent notification. Posts an
+ * ongoing notification (required for a foreground service, and the user-visible
+ * keep-alive indicator) whose title/text/progress come from the start Intent's
+ * extras, and holds a wakelock only while actively downloading.
  */
 class DownloadService : Service() {
   companion object {
@@ -30,7 +31,14 @@ class DownloadService : Service() {
     const val EXTRA_PROGRESS = "progress"
     const val EXTRA_MAX = "max"
     const val EXTRA_INDETERMINATE = "indeterminate"
+    private const val WAKELOCK_TAG = "arkstage:download"
+    // Safety cap: if progress updates stop arriving (e.g. the webview is frozen and
+    // never reports completion), the wakelock auto-releases instead of draining the
+    // battery forever. Each busy progress tick re-acquires it, refreshing the timer.
+    private const val WAKELOCK_TIMEOUT_MS = 10 * 60 * 1000L
   }
+
+  private var wakeLock: PowerManager.WakeLock? = null
 
   override fun onCreate() {
     super.onCreate()
@@ -45,10 +53,20 @@ class DownloadService : Service() {
     val indeterminate = intent?.getBooleanExtra(EXTRA_INDETERMINATE, false) ?: false
     val busy = max > 0 || indeterminate
 
+    // A foreground service stops the process from being KILLED, but on a sleeping
+    // device the CPU still suspends (Doze), freezing the Rust download/index work —
+    // that's why downloads stalled in the background while the notification stayed.
+    // Hold a partial wakelock only while busy (indexing/downloading); release it
+    // when idle/reading so we don't drain the battery for the whole session.
+    if (busy) acquireWakeLock() else releaseWakeLock()
+
     val builder =
       NotificationCompat.Builder(this, CHANNEL_ID)
         .setContentTitle(title)
         .setContentText(text)
+        // text may carry a "\n" (flavor line + progress line); BigTextStyle renders
+        // both lines when the notification is expanded (collapsed shows the first).
+        .setStyle(NotificationCompat.BigTextStyle().bigText(text))
         // Tapping the notification brings the app back to the foreground.
         .setContentIntent(appPendingIntent())
         // A download arrow while busy, a "play" glyph while just running/reading.
@@ -79,7 +97,33 @@ class DownloadService : Service() {
     return START_NOT_STICKY
   }
 
+  override fun onDestroy() {
+    releaseWakeLock()
+    super.onDestroy()
+  }
+
   override fun onBind(intent: Intent?): IBinder? = null
+
+  /**
+   * Keep the CPU awake while a download/index is active so it can't be Doze-frozen.
+   * Re-acquiring with a timeout on every busy tick refreshes the safety timer, so a
+   * steadily-progressing job stays awake while a silently-stalled one self-releases.
+   */
+  private fun acquireWakeLock() {
+    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+    val lock =
+      wakeLock
+        ?: pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG).also {
+          it.setReferenceCounted(false)
+          wakeLock = it
+        }
+    lock.acquire(WAKELOCK_TIMEOUT_MS)
+  }
+
+  private fun releaseWakeLock() {
+    wakeLock?.let { if (it.isHeld) it.release() }
+    wakeLock = null
+  }
 
   /** Re-open (or bring to front) the single-task MainActivity when tapped. */
   private fun appPendingIntent(): PendingIntent {
