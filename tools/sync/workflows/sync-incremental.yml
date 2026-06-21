@@ -1,0 +1,93 @@
+# Arkstage mirror — incremental sync.
+#
+# Deploy this file to `.github/workflows/sync-incremental.yml` in the
+# djkcyl/arkstage-assets repo. It re-mirrors only the story pages that changed on
+# prts.wiki since the last run (via the MediaWiki recentchanges API), so each run
+# is small and gentle on prts (the sync tool itself throttles to ≤2 concurrent /
+# <5 MB/s). The full first fill is done by sync-backfill.yml.
+name: sync-incremental
+
+on:
+  schedule:
+    - cron: "17 */12 * * *" # every 12h
+  workflow_dispatch:
+
+# Never let two syncs run at once (they'd race on the same commit).
+concurrency:
+  group: arkstage-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mirror (this repo)
+        uses: actions/checkout@v4
+
+      - name: Checkout sync tool (prts-reader/tools/sync)
+        uses: actions/checkout@v4
+        with:
+          repository: djkcyl/prts-reader
+          path: _tool
+          sparse-checkout: tools/sync
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install headless Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          echo "CHROME_PATH=$(command -v google-chrome-stable || command -v google-chrome)" >> "$GITHUB_ENV"
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: _tool/tools/sync/node_modules
+          key: sync-node-${{ hashFiles('_tool/tools/sync/package-lock.json') }}
+
+      - name: Install deps
+        working-directory: _tool/tools/sync
+        run: npm install --no-audit --no-fund
+
+      - name: Determine last-sync timestamp
+        id: since
+        run: |
+          SINCE=""
+          if [ -f version.json ]; then
+            SINCE=$(node -e "try{process.stdout.write(JSON.parse(require('fs').readFileSync('version.json','utf8')).generatedAt||'')}catch{}")
+          fi
+          # First run (no version.json yet): look back a week.
+          SINCE=${SINCE:-$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)}
+          echo "since=$SINCE" >> "$GITHUB_OUTPUT"
+          echo "Re-syncing changes since $SINCE"
+
+      - name: Run incremental sync
+        working-directory: _tool/tools/sync
+        env:
+          SYNC_OUT: ${{ github.workspace }}
+        run: node sync.js --incremental "${{ steps.since.outputs.since }}"
+
+      - name: Commit, pin version ref, push
+        run: |
+          git config user.name "arkstage-sync[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "sync: incremental $(date -u +%F) [skip ci]"
+          # Pin version.json.ref to the commit that actually contains the new media,
+          # so the app (which reads version.json @latest) fetches everything from a
+          # permanent, fully-cacheable commit SHA.
+          SHA=$(git rev-parse HEAD)
+          node -e "const f='version.json',j=JSON.parse(require('fs').readFileSync(f,'utf8'));j.ref='$SHA';require('fs').writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
+          git add version.json
+          git commit -m "sync: pin ref $SHA [skip ci]"
+          git push

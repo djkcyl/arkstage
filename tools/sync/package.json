@@ -1,0 +1,17 @@
+{
+  "name": "arkstage-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase 2 sync tool: mirrors Arknights story assets from prts.wiki into a static tree (for jsDelivr).",
+  "bin": {
+    "arkstage-sync": "sync.js"
+  },
+  "scripts": {
+    "spike": "node sync.js --spike"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "puppeteer-core": "^23.0.0"
+  }
+}
