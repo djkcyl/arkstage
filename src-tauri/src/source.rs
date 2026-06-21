@@ -239,6 +239,11 @@ pub async fn fetch_story_manifest(page_title: String) -> Option<Vec<String>> {
         return None;
     }
     let cfg = current();
+    // Honor an explicit prts source: no jsd contact at all (avoids failed jsd
+    // round-trips where jsDelivr is blocked — the very reason a user picks prts).
+    if cfg.kind == SourceKind::Prts {
+        return None;
+    }
     let mirror_ref = resolve_ref(&cfg).await;
     let url = format!(
         "https://cdn.jsdelivr.net/gh/{}@{}/manifests/{}.json",
@@ -265,6 +270,30 @@ pub async fn fetch_story_manifest(page_title: String) -> Option<Vec<String>> {
         let _ = std::fs::write(&path, json);
     }
     Some(urls)
+}
+
+/// Fetch the structured story index (`index.json`) from the jsd mirror, or None on
+/// any failure (offline, prts source selected, 404, parse error) so the caller
+/// falls back to parsing prts.wiki's 剧情一览 HTML directly. The mirror's
+/// index.json uses the same snake_case shape as [`crate::models::StoryIndex`].
+pub async fn fetch_index_from_mirror() -> Option<crate::models::StoryIndex> {
+    if !crate::net::allow_online() {
+        return None;
+    }
+    let cfg = current();
+    if cfg.kind == SourceKind::Prts {
+        return None;
+    }
+    let mirror_ref = resolve_ref(&cfg).await;
+    let url = format!(
+        "https://cdn.jsdelivr.net/gh/{}@{}/index.json",
+        cfg.jsd_repo, mirror_ref
+    );
+    let resp = crate::net::client().get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<crate::models::StoryIndex>().await.ok()
 }
 
 #[cfg(test)]
@@ -332,5 +361,24 @@ mod tests {
     fn prts_limits_are_fixed() {
         assert_eq!(prts_limiter().rate(), 5_000_000);
         assert_eq!(prts_gate().available_permits(), 2);
+    }
+
+    #[test]
+    fn mirror_index_json_deserializes_into_story_index() {
+        // The mirror's index.json MUST use the snake_case shape the app expects
+        // (activity_name / page_title) — guards against the camelCase mismatch the
+        // sync tool originally emitted, which would silently break index-from-mirror.
+        let json = r#"{
+          "categories": [
+            { "name": "主线剧情一览", "chapters": [
+              { "name": "主线", "activity_name": "黑暗时代·上",
+                "stories": [ { "title": "序章·上", "page_title": "W2G/BEG" } ] }
+            ] }
+          ]
+        }"#;
+        let idx: crate::models::StoryIndex = serde_json::from_str(json).unwrap();
+        let ch = &idx.categories[0].chapters[0];
+        assert_eq!(ch.activity_name.as_deref(), Some("黑暗时代·上"));
+        assert_eq!(ch.stories[0].page_title, "W2G/BEG");
     }
 }

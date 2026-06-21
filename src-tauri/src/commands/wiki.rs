@@ -68,9 +68,14 @@ async fn fetch_page_raw(page: &str) -> Result<String, String> {
         .map_err(|e| format!("Failed to read response: {}", e))
 }
 
-/// Fetch and parse the story index from the 剧情一览 page.
+/// Fetch the story index. Prefers the jsDelivr mirror's `index.json` (background-
+/// proof, no prts hit); falls back to parsing prts.wiki's 剧情一览 HTML when the
+/// mirror is unreachable / not yet populated / the prts source is selected.
 #[tauri::command]
 pub async fn fetch_story_index() -> Result<StoryIndex, String> {
+    if let Some(idx) = crate::source::fetch_index_from_mirror().await {
+        return Ok(idx);
+    }
     let html = fetch_page_raw("剧情一览").await?;
     Ok(story_index::parse_story_index(&html))
 }

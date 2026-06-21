@@ -131,9 +131,9 @@ function extractInlineScripts(html) {
 /**
  * Port of `parse_story_index` (story_index.rs): 剧情一览 wikitable → categories.
  * Produces the SAME structure as the Rust app:
- *   { categories: [{ name, chapters: [{ name, activityName, stories: [{ title, pageTitle }] }] }] }
+ *   { categories: [{ name, chapters: [{ name, activity_name, stories: [{ title, page_title }] }] }] }
  * @param {string} html
- * @returns {{ categories: Array<{ name: string, chapters: Array<{ name: string, activityName: string | null, stories: Array<{ title: string, pageTitle: string }> }> }> }}
+ * @returns {{ categories: Array<{ name: string, chapters: Array<{ name: string, activity_name: string | null, stories: Array<{ title: string, page_title: string }> }> }> }}
  */
 export function parseStoryIndex(html) {
   const $ = cheerio.load(html);
@@ -203,11 +203,13 @@ export function parseStoryIndex(html) {
         } catch {
           // keep raw on malformed escapes
         }
-        stories.push({ title: displayText, pageTitle });
+        // snake_case keys to match the Rust StoryIndex / frontend contract, so the
+        // app can deserialize this index.json straight from the mirror.
+        stories.push({ title: displayText, page_title: pageTitle });
       });
 
       if (stories.length > 0) {
-        chapters.push({ name: chapterName, activityName, stories });
+        chapters.push({ name: chapterName, activity_name: activityName, stories });
       }
     }
 
