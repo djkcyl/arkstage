@@ -4,6 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { bootEngineInFrame } from "../lib/engineBoot";
 import { loadBundle } from "../lib/predownload";
 import { setReading } from "../lib/keepalive";
+import { markRead } from "../lib/readState";
+import { setLandscape } from "../lib/orientation";
 
 /**
  * Story player page — loads the ORIGINAL PRTS ScenarioSimulator engine via bootEngine().
@@ -29,6 +31,15 @@ export default function StoryPlayerPage() {
   useEffect(() => {
     setReading(true);
     return () => setReading(false);
+  }, []);
+
+  // The player is the ONLY screen forced to landscape; restore free orientation
+  // on leave. (No-op off Android.)
+  useEffect(() => {
+    setLandscape(true);
+    return () => {
+      setLandscape(false);
+    };
   }, []);
 
   useEffect(() => {
@@ -72,6 +83,7 @@ export default function StoryPlayerPage() {
           isCancelled: () => cancelled,
         });
 
+        markRead(decodedTitle); // opened in the player → counts as read
         setLoading(false);
       } catch (e) {
         if (!cancelled) {

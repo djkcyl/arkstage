@@ -286,11 +286,19 @@
 
 .shelf-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   margin-bottom: 16px;
   padding-bottom: 8px;
   position: relative;
+}
+
+.shelf-icon {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  flex: none;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.5));
 }
 
 .shelf-header::after {
@@ -357,17 +365,18 @@
 .cover-art {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: 3 / 4; /* default; overridden per-cover to the image's own ratio */
   overflow: hidden;
 }
 
-.cover-img,
-.hero-img {
+/* Real cover art (transparent cutout) layered over the gradient backing. */
+.cover-img {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  user-select: none;
 }
 
 /* Filmic darkening so overlaid title typography always stays legible. */
@@ -724,6 +733,26 @@
 
 .dc-stitle:hover {
   color: var(--accent);
+}
+
+/* Read vs unread: read stories/chapters are dimmed + tagged "已读". */
+.dc-story.read .dc-stitle {
+  color: var(--text-secondary);
+}
+
+.dc-read-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.detail-chapter.read .dc-name {
+  color: var(--text-secondary);
 }
 
 /* =========================================================================

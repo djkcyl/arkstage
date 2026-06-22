@@ -1,0 +1,44 @@
+# Regenerate the app's bundled story index from prts.wiki, on manual demand only.
+# Runs the SAME script as local use (tools/gen-index/gen-index.mjs), then commits
+# frontend/src/data/story-index.json if it changed. Full update — no delta logic.
+name: update-index
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-index
+  cancel-in-progress: false
+
+jobs:
+  update-index:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install deps
+        working-directory: tools/gen-index
+        run: npm install --no-audit --no-fund
+
+      - name: Regenerate story index
+        run: node tools/gen-index/gen-index.mjs
+
+      - name: Commit if changed
+        run: |
+          git config user.name "arkstage-index[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/data/story-index.json
+          if git diff --cached --quiet; then
+            echo "Index already up to date — nothing to commit."
+            exit 0
+          fi
+          git commit -m "chore(index): refresh bundled story index from prts.wiki [skip ci]"
+          git push

@@ -6,8 +6,9 @@ import type { StoryChapter } from "../hooks/useStoryIndex";
 
 interface Props {
   book: Book;
-  coverUrl: string | null;
   cachedStories: Set<string>;
+  /** Story page-titles the user has opened in the player (read). */
+  readStories: Set<string>;
   /** Currently-selected story page-titles (shared across the detail view). */
   selected: Set<string>;
   busy: boolean;
@@ -72,8 +73,8 @@ function RangeSelect({
  */
 export default function ChapterDetail({
   book,
-  coverUrl,
   cachedStories,
+  readStories,
   selected,
   busy,
   onBack,
@@ -83,12 +84,13 @@ export default function ChapterDetail({
   onDownloadBook,
   onDeleteBook,
 }: Props) {
-  const [imgOk, setImgOk] = useState(false);
   const fallback = useMemo(() => coverFallback(book.coverKey), [book.coverKey]);
   // Default: all chapters open.
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
 
   const isCached = (pt: string) => cachedStories.has(cachedKey(pt));
+  const isRead = (pt: string) => readStories.has(pt);
+  const allSelected = book.pageTitles.length > 0 && book.pageTitles.every((pt) => selected.has(pt));
 
   const cachedCount = useMemo(
     () => book.pageTitles.filter((pt) => cachedStories.has(cachedKey(pt))).length,
@@ -102,17 +104,7 @@ export default function ChapterDetail({
 
   return (
     <div className="chapter-detail">
-      <div className="detail-hero" style={!imgOk ? { background: fallback.background } : undefined}>
-        {coverUrl && (
-          <img
-            className="hero-img"
-            src={coverUrl}
-            alt=""
-            onLoad={() => setImgOk(true)}
-            onError={() => setImgOk(false)}
-            style={imgOk ? undefined : { display: "none" }}
-          />
-        )}
+      <div className="detail-hero" style={{ background: fallback.background }}>
         <div className="hero-scrim" />
         <button className="hero-back nav-btn" onClick={onBack}>
           ◀ 返回
@@ -126,7 +118,13 @@ export default function ChapterDetail({
           </div>
           <div className="hero-actions">
             <button className="sel-btn primary" disabled={busy} onClick={() => onDownloadBook(book)}>
-              ⬇ 下载整书
+              ⬇ 下载全部章节
+            </button>
+            <button
+              className="sel-btn"
+              onClick={() => onSetMany(book.pageTitles, !allSelected)}
+            >
+              {allSelected ? "✓ 全不选" : "全选章节"}
             </button>
             <button className="sel-btn danger" onClick={() => onDeleteBook(book)}>
               🗑 删除缓存
@@ -140,8 +138,10 @@ export default function ChapterDetail({
           const open = !collapsed[ci];
           const st = chapterState(ch);
           const titles = ch.stories.map((s) => s.page_title);
+          const readCount = titles.filter((pt) => isRead(pt)).length;
+          const chRead = readCount === titles.length; // whole chapter read
           return (
-            <div key={ci} className="detail-chapter">
+            <div key={ci} className={`detail-chapter ${chRead ? "read" : ""}`}>
               <div className="dc-head">
                 <button
                   className={`dc-check ${st.all ? "on" : ""} ${st.some && !st.all ? "partial" : ""}`}
@@ -159,7 +159,10 @@ export default function ChapterDetail({
                 >
                   <span className={`arrow ${open ? "open" : ""}`}>▶</span>
                   <span className="dc-name">{ch.name}</span>
-                  <span className="dc-count">{ch.stories.length} 剧情</span>
+                  <span className="dc-count">
+                    {readCount > 0 && !chRead ? `已读 ${readCount}/${ch.stories.length}` : `${ch.stories.length} 剧情`}
+                  </span>
+                  {chRead && <span className="dc-read-tag">已读</span>}
                 </button>
               </div>
 
@@ -170,8 +173,9 @@ export default function ChapterDetail({
                     {ch.stories.map((s, si) => {
                       const on = selected.has(s.page_title);
                       const cached = isCached(s.page_title);
+                      const read = isRead(s.page_title);
                       return (
-                        <div key={si} className={`dc-story ${on ? "sel" : ""}`}>
+                        <div key={si} className={`dc-story ${on ? "sel" : ""} ${read ? "read" : ""}`}>
                           <button
                             className={`dc-scheck ${on ? "on" : ""}`}
                             onClick={() => onToggleStory(s.page_title)}
@@ -187,6 +191,7 @@ export default function ChapterDetail({
                           >
                             {s.title}
                           </span>
+                          {read && <span className="dc-read-tag">已读</span>}
                         </div>
                       );
                     })}

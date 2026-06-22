@@ -506,9 +506,19 @@ function installWindowedFit(iwin: any, idoc: Document): void {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function triggerWindowOnload(iwin: any): void {
   const Ev = iwin.Event || Event;
-  if (typeof iwin.onload === "function") {
+  // Fire the window.onload PROPERTY handler EXACTLY ONCE. The engine's onload runs
+  // `system.preload.init()`, which registers the preload "complete" listener that
+  // binds the toolbar buttons (自动/重置/LOG/…). Firing onload twice (a direct call
+  // AND a dispatched 'load' event, as it did before) ran preload.init() twice → two
+  // "complete" listeners → every button bound twice → toggle buttons like 自动
+  // engaged-then-disengaged on a single tap (looked like the tap was "swallowed").
+  // Detach onload before dispatching so the event reaches only addEventListener
+  // ('load') handlers, never the property handler a second time.
+  const onload = iwin.onload;
+  if (typeof onload === "function") {
+    iwin.onload = null;
     try {
-      iwin.onload(new Ev("load"));
+      onload.call(iwin, new Ev("load"));
     } catch (e) {
       pushLog("error", "[engine] window.onload threw:", e);
     }

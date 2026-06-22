@@ -1,11 +1,10 @@
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import type { Book } from "../lib/bookshelf";
 import { cachedKey } from "../lib/bookshelf";
-import { coverFallback } from "../lib/cover";
+import { coverFallback, coverArt } from "../lib/cover";
 
 interface Props {
   book: Book;
-  coverUrl: string | null;
   cachedStories: Set<string>;
   /** True when every story in the book is selected. */
   selected: boolean;
@@ -23,15 +22,14 @@ interface Props {
  */
 export default function CoverCard({
   book,
-  coverUrl,
   cachedStories,
   selected,
   partial,
   onOpen,
   onToggleSelect,
 }: Props) {
-  const [imgOk, setImgOk] = useState(false);
   const fallback = useMemo(() => coverFallback(book.coverKey), [book.coverKey]);
+  const art = useMemo(() => coverArt(book.coverKey), [book.coverKey]);
 
   const cachedCount = useMemo(
     () => book.pageTitles.filter((pt) => cachedStories.has(cachedKey(pt))).length,
@@ -52,17 +50,15 @@ export default function CoverCard({
       role="button"
       tabIndex={0}
     >
-      <div className="cover-art" style={!imgOk ? { background: fallback.background } : undefined}>
-        {coverUrl && (
-          <img
-            className="cover-img"
-            src={coverUrl}
-            alt=""
-            loading="lazy"
-            onLoad={() => setImgOk(true)}
-            onError={() => setImgOk(false)}
-            style={imgOk ? undefined : { display: "none" }}
-          />
+      <div
+        className="cover-art"
+        style={{
+          background: fallback.background,
+          aspectRatio: art ? `${art.width} / ${art.height}` : "3 / 4",
+        }}
+      >
+        {art && (
+          <img className="cover-img" src={art.url} alt="" loading="lazy" draggable={false} />
         )}
         <div className="cover-scrim" />
         <div className="cover-meta">
@@ -73,7 +69,7 @@ export default function CoverCard({
         {/* Card-level multi-select: selects/clears all of the book's stories. */}
         <button
           className={`cover-check ${selected ? "on" : ""} ${partial ? "partial" : ""}`}
-          title={selected ? "取消选择本书全部剧情" : "选择本书全部剧情"}
+          title={selected ? "取消选择全部剧情" : "选择全部剧情"}
           onClick={(e) => {
             e.stopPropagation();
             onToggleSelect(book);

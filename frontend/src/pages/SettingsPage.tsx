@@ -9,8 +9,7 @@ import {
   setDownloadSettings,
   isOfflineError,
 } from "../lib/predownload";
-import { getSource, setSource } from "../lib/source";
-import type { SourceKind } from "../lib/source";
+import { collectEnvInfo, copyText } from "../lib/diagnostics";
 
 interface CacheStatus {
   story_index_cached: boolean;
@@ -40,13 +39,7 @@ export default function SettingsPage() {
   // Download tuning: concurrency + bandwidth limit (shown in KB/s; 0 = unlimited).
   const [concurrency, setConcurrency] = useState(4);
   const [rateLimitKbps, setRateLimitKbps] = useState(0);
-  // Asset source: jsDelivr mirror (default) vs official prts.wiki (per-file fallback).
-  const [sourceKind, setSourceKind] = useState<SourceKind>("jsd");
-  const [jsdRepo, setJsdRepo] = useState("");
-  const [jsdRef, setJsdRef] = useState("");
-  const [jsdConcurrency, setJsdConcurrency] = useState(8);
-  const [prtsMaxConcurrency, setPrtsMaxConcurrency] = useState(2);
-  const [prtsRateLimitBps, setPrtsRateLimitBps] = useState(5_000_000);
+  const [envInfo, setEnvInfo] = useState("");
 
   useEffect(() => {
     const saved = localStorage.getItem("prts-nickname");
@@ -58,16 +51,6 @@ export default function SettingsPage() {
       .then((s) => {
         setConcurrency(s.concurrency);
         setRateLimitKbps(Math.round(s.rateLimitBps / 1024));
-      })
-      .catch(() => {});
-    getSource()
-      .then((s) => {
-        setSourceKind(s.kind);
-        setJsdRepo(s.jsdRepo);
-        setJsdRef(s.jsdRef);
-        setJsdConcurrency(s.jsdConcurrency);
-        setPrtsMaxConcurrency(s.prtsMaxConcurrency);
-        setPrtsRateLimitBps(s.prtsRateLimitBps);
       })
       .catch(() => {});
   }, []);
@@ -85,48 +68,6 @@ export default function SettingsPage() {
     }
   };
 
-  const saveSourceKind = async (kind: SourceKind) => {
-    setSourceKind(kind);
-    try {
-      await setSource({ kind });
-      showMsg(kind === "jsd" ? "已切换数据源：镜像加速（jsDelivr）" : "已切换数据源：官方源（prts.wiki）");
-    } catch (e) {
-      showMsg(`保存失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
-    }
-  };
-
-  const saveJsdRepo = async () => {
-    const repo = jsdRepo.trim();
-    setJsdRepo(repo);
-    try {
-      await setSource({ jsdRepo: repo });
-      showMsg(`已保存镜像仓库：${repo}`);
-    } catch (e) {
-      showMsg(`保存失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
-    }
-  };
-
-  const saveJsdRef = async () => {
-    const ref = jsdRef.trim();
-    setJsdRef(ref);
-    try {
-      await setSource({ jsdRef: ref });
-      showMsg(`已保存版本/分支：${ref}`);
-    } catch (e) {
-      showMsg(`保存失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
-    }
-  };
-
-  const saveJsdConcurrency = async (next: number) => {
-    const c = Math.max(1, Math.min(16, Math.round(next) || 1));
-    setJsdConcurrency(c);
-    try {
-      await setSource({ jsdConcurrency: c });
-      showMsg(`已保存镜像并发：${c}`);
-    } catch (e) {
-      showMsg(`保存失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
-    }
-  };
 
   const chooseResourceDir = async () => {
     try {
@@ -194,6 +135,17 @@ export default function SettingsPage() {
       // Ignore
     }
   }, []);
+
+  const copyEnvInfo = async () => {
+    try {
+      const info = await collectEnvInfo();
+      setEnvInfo(info);
+      await copyText(info);
+      showMsg("环境信息已复制到剪贴板");
+    } catch (e) {
+      showMsg(`获取失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
+    }
+  };
 
   const showMsg = (msg: string, duration = 3000) => {
     setMessage(msg);
@@ -326,73 +278,6 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Asset source */}
-      <div className="setting-group">
-        <label>数据源</label>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-          <button
-            className="nav-btn"
-            onClick={() => saveSourceKind("jsd")}
-            style={sourceKind === "jsd" ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
-          >
-            镜像加速（jsDelivr）
-          </button>
-          <button
-            className="nav-btn"
-            onClick={() => saveSourceKind("prts")}
-            style={sourceKind === "prts" ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
-          >
-            官方源（prts.wiki）
-          </button>
-        </div>
-        <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginTop: "8px" }}>
-          默认走镜像，缺失的文件按单文件回退官方源
-        </div>
-        {sourceKind === "jsd" && (
-          <div
-            style={{ display: "flex", gap: "16px", flexWrap: "wrap", alignItems: "center", marginTop: "12px" }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <span style={{ fontSize: "13px" }}>镜像仓库</span>
-              <input
-                type="text"
-                value={jsdRepo}
-                placeholder="djkcyl/arkstage-assets"
-                style={{ width: "200px" }}
-                onChange={(e) => setJsdRepo(e.target.value)}
-                onBlur={saveJsdRepo}
-              />
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <span style={{ fontSize: "13px" }}>版本/分支</span>
-              <input
-                type="text"
-                value={jsdRef}
-                placeholder="main"
-                style={{ width: "120px" }}
-                onChange={(e) => setJsdRef(e.target.value)}
-                onBlur={saveJsdRef}
-              />
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <span style={{ fontSize: "13px" }}>镜像并发</span>
-              <input
-                type="number"
-                min={1}
-                max={16}
-                value={jsdConcurrency}
-                style={{ width: "72px" }}
-                onChange={(e) => setJsdConcurrency(Number(e.target.value))}
-                onBlur={() => saveJsdConcurrency(jsdConcurrency)}
-              />
-            </div>
-          </div>
-        )}
-        <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginTop: "12px" }}>
-          官方源限速：≤{prtsMaxConcurrency} 并发 · ≤{(prtsRateLimitBps / 1e6).toFixed(0)} MB/s
-        </div>
-      </div>
-
       {/* Download tuning */}
       <div className="setting-group">
         <label>下载设置（预下载的并发与限速）</label>
@@ -513,6 +398,36 @@ export default function SettingsPage() {
           <div>3. 浏览和打开剧情时会自动缓存每个故事的脚本</div>
           <div>4. 缓存后可离线阅读已缓存的剧情</div>
         </div>
+      </div>
+
+      {/* Environment / diagnostics */}
+      <div className="setting-group">
+        <label>环境信息（反馈问题用）</label>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+          <button className="btn-primary" onClick={copyEnvInfo}>
+            复制环境信息
+          </button>
+          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+            含应用/系统/WebView 内核版本，反馈问题时一并提供
+          </span>
+        </div>
+        {envInfo && (
+          <pre
+            style={{
+              marginTop: "10px",
+              padding: "10px",
+              background: "var(--bg-tertiary)",
+              borderRadius: "6px",
+              fontSize: "12px",
+              lineHeight: "1.5",
+              color: "var(--text-secondary)",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+            }}
+          >
+            {envInfo}
+          </pre>
+        )}
       </div>
 
       {message && (

@@ -6,6 +6,18 @@ pub fn media_root(app_data: &Path) -> PathBuf {
     app_data.join("media")
 }
 
+/// Build the prts.wiki fetch URL for a canonical key (`{host}/{path}`): https-prefix
+/// it and percent-encode each path segment (the host is already a lowercase dotted
+/// domain). Media is always fetched straight from prts.
+pub fn prts_url(key: &str) -> String {
+    let encoded = key
+        .split('/')
+        .map(|seg| urlencoding::encode(seg).into_owned())
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("https://{}", encoded)
+}
+
 /// Normalize EITHER a full `http(s)://host/path…` URL OR a bare `host/path…` key
 /// into the canonical asset key `{host}/{path}` (query/fragment dropped). This is
 /// the content-addressed store key, the cross-source dedup key, AND the basis for

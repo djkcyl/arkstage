@@ -152,6 +152,22 @@ fn apply(p: &Plan) {
 #[cfg(not(target_os = "android"))]
 fn apply(_p: &Plan) {}
 
+/// Force the activity to landscape (player) or back to free/sensor orientation
+/// (everywhere else). No-op off Android.
+#[tauri::command]
+pub fn set_orientation(landscape: bool) {
+    #[cfg(target_os = "android")]
+    {
+        if let Err(e) = imp::set_orientation(landscape) {
+            log::warn!("[android_service] set_orientation failed: {e}");
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = landscape;
+    }
+}
+
 #[cfg(target_os = "android")]
 mod imp {
     use jni::objects::{JObject, JValue};
@@ -222,6 +238,25 @@ mod imp {
             )
             .map_err(|e| e.to_string())?;
         }
+        Ok(())
+    }
+
+    /// Call activity.setRequestedOrientation(int). SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    /// = 6 (both landscape directions); SCREEN_ORIENTATION_UNSPECIFIED = -1 (system/
+    /// sensor decides — the default for non-player screens).
+    pub fn set_orientation(landscape: bool) -> Result<(), String> {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| e.to_string())?;
+        let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+        let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
+        let value: i32 = if landscape { 6 } else { -1 };
+        env.call_method(
+            &activity,
+            "setRequestedOrientation",
+            "(I)V",
+            &[JValue::Int(value)],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 

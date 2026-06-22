@@ -110,8 +110,15 @@ struct Job {
     /// Keying off the canonical key (not the raw URL) collapses http/https/case
     /// variants of the same asset to a single download.
     seen: Mutex<HashSet<String>>,
+    /// Canonical keys that exhausted retries / hit a permanent 4xx, with their
+    /// last error — surfaced so missing assets (e.g. 立绘) are diagnosable instead
+    /// of vanishing into a bare count. Capped to avoid unbounded growth.
+    failed_keys: Mutex<Vec<String>>,
     speed: Mutex<Speed>,
 }
+
+/// Cap on retained failed-key diagnostics per job.
+const MAX_FAILED_KEYS: usize = 100;
 
 /// Sliding sample for instantaneous bytes/sec (delta since the last emit).
 struct Speed {
@@ -134,6 +141,9 @@ pub struct Snapshot {
     pub skipped: u32,
     pub bytes: u64,
     pub bytes_per_sec: u64,
+    /// Keys that failed after retries (with their last error), for diagnosing
+    /// missing assets. Capped; empty in the common case.
+    pub failed_keys: Vec<String>,
 }
 
 impl Job {
@@ -154,6 +164,7 @@ impl Job {
             active_workers: AtomicUsize::new(0),
             pending: Mutex::new(VecDeque::new()),
             seen: Mutex::new(HashSet::new()),
+            failed_keys: Mutex::new(Vec::new()),
             speed: Mutex::new(Speed {
                 last_at: now,
                 last_bytes: 0,
@@ -204,6 +215,7 @@ impl Job {
             skipped: self.skipped.load(Ordering::Relaxed),
             bytes: self.bytes.load(Ordering::Relaxed),
             bytes_per_sec: self.speed.lock().unwrap().bps,
+            failed_keys: self.failed_keys.lock().unwrap().clone(),
         }
     }
 }
@@ -238,13 +250,8 @@ impl Manager {
         job.enqueue(initial);
         self.jobs.lock().unwrap().insert(id, job.clone());
 
-        // prts is hard-capped at its fixed concurrency; jsd uses the configurable
-        // worker count (driven by the download_settings commands).
-        let workers = if crate::source::current().kind == crate::source::SourceKind::Prts {
-            crate::source::PRTS_MAX_CONCURRENCY
-        } else {
-            self.concurrency.load(Ordering::Relaxed).max(1)
-        };
+        // Use the configurable worker count (driven by the download_settings commands).
+        let workers = self.concurrency.load(Ordering::Relaxed).max(1);
         job.active_workers.store(workers, Ordering::Relaxed);
 
         let root = Arc::new(crate::media::media_root(&crate::data_root::data_root()));
@@ -372,11 +379,15 @@ async fn worker(job: Arc<Job>, root: Arc<std::path::PathBuf>, sink: Arc<dyn Prog
             Ok(()) => {
                 job.success.fetch_add(1, Ordering::Relaxed);
             }
-            Err(_) => {
-                // Exhausted retries (or a permanent 4xx). Tracked internally for
-                // diagnostics but never surfaced — auto-retry already gave it
-                // several attempts, so we don't alarm the user with a failure count.
+            Err(e) => {
+                // Exhausted retries (or a permanent 4xx). Record the key + error so
+                // missing assets (e.g. 立绘) are diagnosable, and log for logcat.
                 job.failed.fetch_add(1, Ordering::Relaxed);
+                eprintln!("[download] failed {key}: {e}");
+                let mut fk = job.failed_keys.lock().unwrap();
+                if fk.len() < MAX_FAILED_KEYS {
+                    fk.push(format!("{key} — {e}"));
+                }
             }
         }
         finish_item(&job, &*sink);
@@ -394,50 +405,26 @@ async fn worker(job: Arc<Job>, root: Arc<std::path::PathBuf>, sink: Arc<dyn Prog
     }
 }
 
-/// Source-aware fetch of one canonical key into the store. Under jsd we try the
-/// jsd mirror first; on failure (and if not cancelled) we fall back PER FILE to
-/// prts — which is throttled by the global prts gate + limiter. Under prts we go
-/// straight to the (throttled) prts fetch.
+/// Fetch one canonical key straight from prts.wiki into the store.
 async fn fetch_item(
     client: &reqwest::Client,
     key: &str,
     root: &std::path::Path,
     job: &Job,
 ) -> Result<(), String> {
-    let cfg = crate::source::current();
-    if cfg.kind == crate::source::SourceKind::Jsd {
-        let url = crate::source::fetch_url(crate::source::SourceKind::Jsd, key, &cfg);
-        if fetch_with_retry(client, &url, key, root, job, false).await.is_ok() {
-            return Ok(());
-        }
-        if job.cancelled.load(Ordering::Relaxed) {
-            return Err("cancelled".into());
-        }
-        // fall through to the per-file prts fallback (throttled).
-    }
-    let purl = crate::source::fetch_url(crate::source::SourceKind::Prts, key, &cfg);
-    fetch_with_retry(client, &purl, key, root, job, true).await
+    let url = crate::media::prts_url(key);
+    fetch_with_retry(client, &url, key, root, job).await
 }
 
-/// Stream a URL into the media store under `key`, metering bytes through the global
-/// limiter. When `is_prts`, additionally hold a prts concurrency permit across the
-/// whole request and meter every chunk through the prts bandwidth limiter too.
+/// Stream a URL into the media store under `key`, metering bytes through the user's
+/// global bandwidth limiter.
 async fn fetch_to_store(
     client: &reqwest::Client,
     url: &str,
     key: &str,
     root: &std::path::Path,
     job: &Job,
-    is_prts: bool,
 ) -> Result<(), String> {
-    // Hold a prts permit for the WHOLE request+body so concurrent prts fetches
-    // never exceed the cap (kept alive until this scope ends).
-    let _permit = if is_prts {
-        Some(crate::source::prts_gate().acquire().await.unwrap())
-    } else {
-        None
-    };
-
     let mut resp = client
         .get(url)
         .header("Referer", "https://prts.wiki/")
@@ -451,12 +438,8 @@ async fn fetch_to_store(
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
         let len = chunk.len() as u64;
-        // User's global bandwidth cap (always applies).
+        // User's global bandwidth cap (0 = unlimited).
         crate::net::limiter().acquire(len).await;
-        // prts-only: also meter through the fixed prts bandwidth limiter.
-        if is_prts {
-            crate::source::prts_limiter().acquire(len).await;
-        }
         job.bytes.fetch_add(len, Ordering::Relaxed);
         buf.extend_from_slice(&chunk);
         // Abort mid-file on cancel so big files don't hold the job open.
@@ -482,7 +465,6 @@ async fn fetch_with_retry(
     key: &str,
     root: &std::path::Path,
     job: &Job,
-    is_prts: bool,
 ) -> Result<(), String> {
     let mut attempt = 0u32;
     loop {
@@ -490,7 +472,7 @@ async fn fetch_with_retry(
         if job.cancelled.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
-        match fetch_to_store(client, url, key, root, job, is_prts).await {
+        match fetch_to_store(client, url, key, root, job).await {
             Ok(()) => return Ok(()),
             Err(e) => {
                 if job.cancelled.load(Ordering::Relaxed)

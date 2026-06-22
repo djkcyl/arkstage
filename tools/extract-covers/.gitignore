@@ -1,0 +1,4 @@
+# Raw extracted PNGs (intermediates) — only the bundled webp under
+# frontend/src/assets/covers + cover-dims.json are committed.
+out/
+out-storyentry/

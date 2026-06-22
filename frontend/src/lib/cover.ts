@@ -1,30 +1,44 @@
-import { getSource } from "./source";
-import type { SourceConfig } from "./source";
-
 // ---------------------------------------------------------------------------
-// Cover art + procedural cinematic fallback helpers for the bookshelf.
-//
-// Real cover art lives at covers/<sanitized>.jpg in the asset repo and is
-// fetched directly over jsDelivr. The covers/ dir is currently empty, so the
-// CoverCard renders a procedural gradient seeded from the title (hash → hue)
-// whenever the <img> fails to load. The gradient is intentional, not a
-// placeholder — varied per book so the shelf reads as distinct cinematic cards.
+// Bookshelf covers. Real 剧情一览 cover art (storyEntryPic, transparent cutouts)
+// is bundled per book and looked up by cover key; books without one (主线 EPs,
+// special modes) fall back to a procedural filmic gradient seeded from the title.
 // ---------------------------------------------------------------------------
+import coverDims from "../data/cover-dims.json";
 
-/** Sanitize a cover key the same way the backend does (`/\:*?"<>|` → `_`). */
-export function sanitizeCoverKey(s: string): string {
-  return s.replace(/[/\\:*?"<>|]/g, "_");
+// Bundled cover images, keyed by file basename = sanitize(coverKey).
+const COVER_URLS = import.meta.glob("../assets/covers/*.webp", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
+
+const COVER_BY_KEY: Record<string, string> = {};
+for (const [p, url] of Object.entries(COVER_URLS)) {
+  const base = p.slice(p.lastIndexOf("/") + 1).replace(/\.webp$/, "");
+  COVER_BY_KEY[base] = url;
+}
+const DIMS = coverDims as Record<string, number[]>;
+
+/** Match bundle-covers.mjs / extract-storyentry.mjs sanitize (filesystem-safe). */
+function sanitizeCoverKey(key: string): string {
+  return key.replace(/[/\\:*?"<>|]/g, "_");
 }
 
-/** Build the jsDelivr cover URL for a book's cover key. */
-export function coverUrl(src: SourceConfig, coverKey: string): string {
-  return `https://cdn.jsdelivr.net/gh/${src.jsdRepo}@${src.jsdRef}/covers/${sanitizeCoverKey(coverKey)}.jpg`;
+export interface CoverArt {
+  url: string;
+  width: number;
+  height: number;
 }
 
-/** Convenience: resolve the active source then build the URL. */
-export async function resolveCoverUrl(coverKey: string): Promise<string> {
-  const src = await getSource();
-  return coverUrl(src, coverKey);
+/** Bundled cover art for a book's cover key, or null if none exists. */
+export function coverArt(coverKey: string): CoverArt | null {
+  const k = sanitizeCoverKey(coverKey);
+  const url = COVER_BY_KEY[k];
+  if (!url) return null;
+  const d = DIMS[k];
+  const width = d?.[0] ?? 3;
+  const height = d?.[1] ?? 4;
+  return { url, width, height };
 }
 
 /** Stable 32-bit hash of a string (FNV-1a) for seeding the gradient. */

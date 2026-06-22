@@ -6,7 +6,6 @@ mod media;
 mod models;
 mod net;
 mod parser;
-mod source;
 
 use commands::{assets, cache, wiki};
 use tauri::Manager;
@@ -218,10 +217,8 @@ pub fn run() {
             // Network policy
             net::set_allow_online,
             net::get_allow_online,
-            // Asset source + manifest provider
-            source::source_get,
-            source::source_set,
-            source::fetch_story_manifest,
+            // Screen orientation (player forces landscape; elsewhere free)
+            android_service::set_orientation,
             // Resource directory
             data_root::get_resource_dir,
             data_root::set_resource_dir,

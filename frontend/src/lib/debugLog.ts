@@ -90,11 +90,11 @@ export function captureIframe(iwin: any): void {
     // Capture phase catches resource-load errors (which don't bubble) AND script errors.
     iwin.addEventListener(
       "error",
-      (e: ErrorEvent & { target?: any }) => {
-        const t = e.target;
+      (e: ErrorEvent) => {
+        const t = e.target as { tagName?: string; src?: string; href?: string } | null;
         const tag = t && typeof t.tagName === "string" ? t.tagName.toUpperCase() : "";
         if (["IMG", "AUDIO", "VIDEO", "SOURCE", "SCRIPT", "LINK"].includes(tag)) {
-          pushLog("error", "[engine] resource load failed:", t.src || t.href || tag);
+          pushLog("error", "[engine] resource load failed:", t?.src || t?.href || tag);
         } else if (e.error) {
           pushLog("error", "[engine]", e.error);
         } else if (e.message) {

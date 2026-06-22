@@ -9,10 +9,19 @@ import type { PredownloadStatus, PredownloadSession } from "./predownload";
  * stay visible everywhere except inside the reader. The download job itself runs
  * in Rust; this just keeps the UI state/controls alive across route changes.
  */
+/** A finished-run summary, shown in a dismissible panel (with copyable failures). */
+interface DownloadResult {
+  message: string;
+  failedKeys: string[];
+}
+
 interface DownloadContextValue {
   status: PredownloadStatus | null;
   session: PredownloadSession | null;
   busy: boolean;
+  /** Last finished-run summary (until dismissed). */
+  result: DownloadResult | null;
+  dismissResult: () => void;
   /** Start a predownload over the given story page-titles (no-op if one is running). */
   start: (titles: string[]) => Promise<void>;
   /** Register a callback fired whenever a run finishes (e.g. to refresh cache lists). */
@@ -21,6 +30,8 @@ interface DownloadContextValue {
 
 const DownloadContext = createContext<DownloadContextValue | null>(null);
 
+// Provider + its hook intentionally co-located (HMR-only lint rule).
+// eslint-disable-next-line react-refresh/only-export-components
 export function useDownload(): DownloadContextValue {
   const ctx = useContext(DownloadContext);
   if (!ctx) throw new Error("useDownload must be used within <DownloadProvider>");
@@ -30,6 +41,7 @@ export function useDownload(): DownloadContextValue {
 export function DownloadProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<PredownloadStatus | null>(null);
   const [session, setSession] = useState<PredownloadSession | null>(null);
+  const [result, setResult] = useState<DownloadResult | null>(null);
   const runningRef = useRef(false);
   const finishedListeners = useRef<Set<() => void>>(new Set());
 
@@ -59,18 +71,25 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     try {
       const { cancelled, job } = await runPredownload(titles, setStatus, setSession);
       const verb = cancelled ? "已取消" : "完成";
-      // Failures are auto-retried and not reported; show new vs. already-cached.
+      const failed = job?.failedKeys ?? [];
+      // Show new vs. already-cached, and surface any assets that failed after retries
+      // (e.g. missing 立绘) so they're diagnosable instead of vanishing into a count.
       const tail = job
-        ? `：共 ${job.total} 个资源，新下载 ${job.success} 个，已缓存 ${job.skipped} 个`
+        ? `：共 ${job.total} 个资源，新下载 ${job.success} 个，已缓存 ${job.skipped} 个` +
+          (failed.length ? `，失败 ${failed.length} 个` : "")
         : "";
-      alert(`预下载${verb}${tail}`);
+      if (failed.length) {
+        console.warn("[predownload] 失败资源:\n" + failed.join("\n"));
+      }
+      setResult({ message: `预下载${verb}${tail}`, failedKeys: failed });
       finishedListeners.current.forEach((f) => f());
     } catch (e) {
-      alert(
-        isOfflineError(e)
+      setResult({
+        message: isOfflineError(e)
           ? "当前为离线模式，无法下载。请先在「设置 → 联网策略」中开启联网。"
-          : `预下载失败: ${e instanceof Error ? e.message : String(e)}`
-      );
+          : `预下载失败: ${e instanceof Error ? e.message : String(e)}`,
+        failedKeys: [],
+      });
     } finally {
       runningRef.current = false;
       setStatus(null);
@@ -79,7 +98,17 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <DownloadContext.Provider value={{ status, session, busy: status !== null, start, onFinished }}>
+    <DownloadContext.Provider
+      value={{
+        status,
+        session,
+        busy: status !== null,
+        result,
+        dismissResult: () => setResult(null),
+        start,
+        onFinished,
+      }}
+    >
       {children}
     </DownloadContext.Provider>
   );

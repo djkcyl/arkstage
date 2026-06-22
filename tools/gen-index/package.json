@@ -1,0 +1,10 @@
+{
+  "name": "arkstage-gen-index",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Regenerate the app's bundled story index from prts.wiki (full update).",
+  "bin": { "gen-index": "gen-index.mjs" },
+  "scripts": { "start": "node gen-index.mjs" },
+  "dependencies": { "cheerio": "^1.0.0" }
+}

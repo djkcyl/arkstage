@@ -1,5 +1,45 @@
+import { useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useDownload } from "../lib/DownloadContext";
+import { copyText } from "../lib/diagnostics";
+
+/** Dismissible summary panel for a finished run, with copyable failure list. */
+function ResultPanel() {
+  const { result, dismissResult } = useDownload();
+  const [copied, setCopied] = useState(false);
+  if (!result) return null;
+  const { message, failedKeys } = result;
+  const copy = async () => {
+    await copyText(`${message}\n\n失败资源（${failedKeys.length}）：\n${failedKeys.join("\n")}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div className="dl-result-overlay" onClick={dismissResult}>
+      <div className="dl-result" onClick={(e) => e.stopPropagation()}>
+        <div className="dl-result-msg">{message}</div>
+        {failedKeys.length > 0 && (
+          <>
+            <div className="dl-result-sub">
+              失败资源（已重试多次，多为 prts 上缺失的音/视频，不影响剧情）：
+            </div>
+            <textarea className="dl-result-list" readOnly value={failedKeys.join("\n")} />
+          </>
+        )}
+        <div className="dl-result-actions">
+          {failedKeys.length > 0 && (
+            <button className="nav-btn" onClick={copy}>
+              {copied ? "已复制 ✓" : "复制失败列表"}
+            </button>
+          )}
+          <button className="nav-btn" onClick={dismissResult}>
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** Human-readable transfer speed, e.g. "1.2 MB/s". */
 function fmtSpeed(bps: number): string {
@@ -44,8 +84,9 @@ export default function DownloadBar() {
   const { status, session } = useDownload();
   const { pathname } = useLocation();
 
-  if (!status) return null;
   if (pathname.startsWith("/play/")) return null;
+  // The result panel shows after a run (status cleared); the progress bar only while running.
+  if (!status) return <ResultPanel />;
 
   const togglePause = () => {
     if (!session) return;
@@ -91,6 +132,7 @@ export default function DownloadBar() {
       <button className="nav-btn" style={{ fontSize: "12px" }} onClick={() => session?.cancel()}>
         取消
       </button>
+      <ResultPanel />
     </div>
   );
 }

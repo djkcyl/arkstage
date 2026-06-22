@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useState, useEffect, useCallback } from "react";
+// Index bundled in the app: the offline baseline, refreshable from prts.wiki.
+import bundledIndex from "../data/story-index.json";
+import { regroupStoryIndex } from "../lib/storylines";
 
 export interface StoryIndex {
   categories: StoryCategory[];
@@ -42,7 +45,7 @@ export function useStoryIndex() {
 
       if (cached) {
         const parsed = JSON.parse(cached) as StoryIndex;
-        setIndex(parsed);
+        setIndex(regroupStoryIndex(parsed));
         setLoading(false);
 
         // Refresh in background
@@ -50,8 +53,11 @@ export function useStoryIndex() {
         return;
       }
 
-      // No cache — fetch from wiki
-      await refreshIndex(setIndex);
+      // No cache — show the bundled index instantly (offline baseline), then try
+      // to refresh from prts.wiki in the background (no-op if offline).
+      setIndex(regroupStoryIndex(bundledIndex as StoryIndex));
+      setLoading(false);
+      refreshIndex(setIndex).catch(() => {});
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -70,9 +76,9 @@ async function refreshIndex(
   setIndex: (idx: StoryIndex) => void
 ): Promise<void> {
   const fresh = await invoke<StoryIndex>("fetch_story_index");
-  setIndex(fresh);
+  setIndex(regroupStoryIndex(fresh));
 
-  // Save to cache
+  // Cache the raw fresh index; regrouping is applied on read.
   await invoke("save_to_cache", {
     key: "story-index",
     data: JSON.stringify(fresh),

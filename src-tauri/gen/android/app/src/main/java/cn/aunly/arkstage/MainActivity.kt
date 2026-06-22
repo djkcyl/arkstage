@@ -5,12 +5,32 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
+    // Edge-to-edge keeps the WebView layout stable; we then HIDE the system bars so
+    // the (landscape) reader runs fullscreen and the status bar never overlaps the
+    // top button row. Orientation is locked to landscape in the manifest.
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    hideSystemBars()
     requestNotificationPermission()
+  }
+
+  /** Re-hide the bars after they're transiently shown (swipe) or a dialog steals focus. */
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    if (hasFocus) hideSystemBars()
+  }
+
+  /** Immersive fullscreen: hide status + navigation bars; a swipe reveals them transiently. */
+  private fun hideSystemBars() {
+    WindowInsetsControllerCompat(window, window.decorView).apply {
+      hide(WindowInsetsCompat.Type.systemBars())
+      systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    }
   }
 
   /**

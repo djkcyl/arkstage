@@ -3,14 +3,13 @@ import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useStoryIndex } from "../hooks/useStoryIndex";
 import { useDownload } from "../lib/DownloadContext";
-import { getSource } from "../lib/source";
-import type { SourceConfig } from "../lib/source";
-import { coverUrl } from "../lib/cover";
 import { buildShelves } from "../lib/bookshelf";
+import { getReadStories } from "../lib/readState";
 import type { Book, Shelf } from "../lib/bookshelf";
 import CoverCard from "../components/CoverCard";
 import ChapterDetail from "../components/ChapterDetail";
 import SelectionBar from "../components/SelectionBar";
+import { storylineIcon } from "../assets/storylines";
 
 /**
  * Cinematic ebook bookshelf. Categories become shelf sections; chapters sharing
@@ -23,10 +22,45 @@ export default function StoryBrowserPage() {
   const [search, setSearch] = useState("");
   const [cachedStories, setCachedStories] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [openBook, setOpenBook] = useState<Book | null>(null);
-  const [source, setSource] = useState<SourceConfig | null>(null);
+  // Restore the drilled-in book when returning from the player (it's a separate
+  // route, so this component remounts). A stub {category,coverKey} is enough —
+  // `liveBook` resolves it to the full book from the (always-present) index.
+  const [openBook, setOpenBook] = useState<Book | null>(() => {
+    try {
+      const raw = sessionStorage.getItem("arkstage-open-book");
+      if (!raw) return null;
+      const { category, coverKey } = JSON.parse(raw);
+      return { category, coverKey, chapters: [], pageTitles: [], storyCount: 0 } as Book;
+    } catch {
+      return null;
+    }
+  });
+  // Read stories (refreshed on mount + when a download finishes, i.e. on return).
+  const [readStories, setReadStories] = useState<Set<string>>(() => getReadStories());
   const { start: startPredownload, busy, status, onFinished } = useDownload();
   const navigate = useNavigate();
+
+  // Persist the open book so returning from the player lands back on it (#2).
+  useEffect(() => {
+    try {
+      if (openBook)
+        sessionStorage.setItem(
+          "arkstage-open-book",
+          JSON.stringify({ category: openBook.category, coverKey: openBook.coverKey })
+        );
+      else sessionStorage.removeItem("arkstage-open-book");
+    } catch {
+      /* ignore */
+    }
+  }, [openBook]);
+
+  // Re-read the read-state set whenever the window regains focus (e.g. after the
+  // player route unmounts back to here).
+  useEffect(() => {
+    const refresh = () => setReadStories(getReadStories());
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, []);
 
   const refreshCached = useCallback(
     () =>
@@ -41,18 +75,6 @@ export default function StoryBrowserPage() {
     refreshCached();
     return onFinished(refreshCached);
   }, [onFinished, refreshCached]);
-
-  // Resolve the asset source once so we can build cover URLs.
-  useEffect(() => {
-    getSource()
-      .then(setSource)
-      .catch(() => {});
-  }, []);
-
-  const urlFor = useCallback(
-    (coverKey: string): string | null => (source ? coverUrl(source, coverKey) : null),
-    [source]
-  );
 
   // All shelves, then filtered by the search query (matches book title /
   // chapter / activity / story title / page_title).
@@ -194,6 +216,18 @@ export default function StoryBrowserPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
+            <button
+              className="nav-btn"
+              onClick={selectAllVisible}
+              title="选择当前全部剧情"
+            >
+              全选
+            </button>
+            {selected.size > 0 && (
+              <button className="nav-btn" onClick={clearSelection} title="取消全部选择">
+                全不选
+              </button>
+            )}
             <button className="nav-btn" onClick={refresh} title="刷新">
               ↻
             </button>
@@ -203,6 +237,14 @@ export default function StoryBrowserPage() {
             {filtered.map((shelf) => (
               <section key={shelf.category} className="shelf">
                 <div className="shelf-header">
+                  {storylineIcon(shelf.category) && (
+                    <img
+                      className="shelf-icon"
+                      src={storylineIcon(shelf.category)}
+                      alt=""
+                      aria-hidden="true"
+                    />
+                  )}
                   <span className="shelf-title">{shelf.category}</span>
                   <span className="shelf-count">{shelf.books.length} 本</span>
                 </div>
@@ -213,7 +255,6 @@ export default function StoryBrowserPage() {
                       <CoverCard
                         key={book.coverKey}
                         book={book}
-                        coverUrl={urlFor(book.coverKey)}
                         cachedStories={cachedStories}
                         selected={st.selected}
                         partial={st.partial && !st.selected}
@@ -234,8 +275,8 @@ export default function StoryBrowserPage() {
       {liveBook && (
         <ChapterDetail
           book={liveBook}
-          coverUrl={urlFor(liveBook.coverKey)}
           cachedStories={cachedStories}
+          readStories={readStories}
           selected={selected}
           busy={busy}
           onBack={() => setOpenBook(null)}

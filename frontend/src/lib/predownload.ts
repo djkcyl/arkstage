@@ -42,6 +42,8 @@ export interface JobSnapshot {
   skipped: number;
   bytes: number;
   bytesPerSec: number;
+  /** Keys that failed after retries (with last error), for diagnosing missing assets. */
+  failedKeys: string[];
 }
 
 /** True when an error string came from the backend offline gate. */
@@ -100,15 +102,6 @@ export async function manifestForStory(bundle: WidgetBundle, title: string): Pro
   const key = `manifest_${title.replace(/\//g, "_")}`;
   const cached = await invoke<string | null>("load_from_cache", { key });
   if (cached) return JSON.parse(cached) as string[];
-  // Mirror (jsDelivr) provides the manifest as JSON — no WebView engine boot needed,
-  // so this path is fully background-proof. Falls back to WebView capture below when
-  // the story isn't mirrored yet (provider returns null) or we're offline.
-  try {
-    const fromMirror = await invoke<string[] | null>("fetch_story_manifest", { pageTitle: title });
-    if (fromMirror && fromMirror.length) return fromMirror;
-  } catch {
-    /* mirror unreachable → fall through to WebView capture */
-  }
   const script = await ensureScript(title); // may fetch (online); throws if offline+uncached
   const urls = await captureManifest(bundle, script, title);
   await invoke("save_to_cache", { key, data: JSON.stringify(urls) }).catch(() => {});
@@ -203,6 +196,7 @@ const ZERO_JOB: JobSnapshot = {
   skipped: 0,
   bytes: 0,
   bytesPerSec: 0,
+  failedKeys: [],
 };
 
 /**
