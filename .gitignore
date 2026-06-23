@@ -46,3 +46,8 @@ docs/reference/
 *.sln
 *.sw?
 .playwright-mcp/
+
+# Stray device screenshots / scratch references
+Screenshot_*.jpg
+Screenshot_*.png
+/ref/

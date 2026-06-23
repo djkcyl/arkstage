@@ -1,7 +1,11 @@
 // ---------------------------------------------------------------------------
-// Bookshelf covers. Real 剧情一览 cover art (storyEntryPic, transparent cutouts)
-// is bundled per book and looked up by cover key; books without one (主线 EPs,
-// special modes) fall back to a procedural filmic gradient seeded from the title.
+// Bookshelf covers, bundled per book and looked up by cover key. Two sources:
+//   • in-game StoryLine ("mixstory") key visuals — square 432² main-story EPs +
+//     wide ~632×456 activities (tools/extract-covers/extract-mixstory-kv.mjs);
+//   • books with no StoryLine kv (联动 collab events + 集成战略/生息演算 modes)
+//     use a prts banner (tools/extract-covers/extract-banner-covers.mjs).
+// The two with neither (特殊/四月辑录) fall back to a flat panel with the app
+// logo as a placeholder (coverFallback + CoverCard).
 // ---------------------------------------------------------------------------
 import coverDims from "../data/cover-dims.json";
 
@@ -41,42 +45,33 @@ export function coverArt(coverKey: string): CoverArt | null {
   return { url, width, height };
 }
 
-/** Stable 32-bit hash of a string (FNV-1a) for seeding the gradient. */
-function hash(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
+// Chapter-detail top banners (活动预告图), keyed like covers. Shown behind the
+// ChapterDetail hero with a bottom fade. Not every book has one (early main EPs).
+const BANNER_URLS = import.meta.glob("../assets/banners/*.webp", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
+const BANNER_BY_KEY: Record<string, string> = {};
+for (const [p, url] of Object.entries(BANNER_URLS)) {
+  BANNER_BY_KEY[p.slice(p.lastIndexOf("/") + 1).replace(/\.webp$/, "")] = url;
+}
+
+/** Bundled chapter banner URL for a book's cover key, or null if none. */
+export function bannerArt(coverKey: string): string | null {
+  return BANNER_BY_KEY[sanitizeCoverKey(coverKey)] ?? null;
 }
 
 export interface CoverFallback {
-  /** Inline background for the procedural cinematic card. */
+  /** Inline background for an empty-cover card. */
   background: string;
-  /** Base hue (0–360) for accent tinting. */
-  hue: number;
 }
 
 /**
- * Build a rich, filmic dark gradient seeded from the title. Two hues a short
- * arc apart give a duotone sweep; a vignette + a faint highlight keep it from
- * looking flat. Kept dark so overlaid gold title typography stays legible.
+ * Empty-cover card for books with no bundled image (特殊 / 四月辑录). A flat dark
+ * panel — the old per-title color gradient was dropped on request; CoverCard
+ * overlays the app logo as the placeholder mark on top of this.
  */
-export function coverFallback(title: string): CoverFallback {
-  const h = hash(title);
-  const hue = h % 360;
-  const hue2 = (hue + 28 + (h % 40)) % 360;
-  const a = `hsl(${hue}, 42%, 22%)`;
-  const b = `hsl(${hue2}, 38%, 12%)`;
-  const c = `hsl(${(hue + 180) % 360}, 30%, 8%)`;
-  const background = [
-    // soft top-left key light
-    `radial-gradient(120% 90% at 18% 8%, ${a} 0%, transparent 55%)`,
-    // vignette toward bottom-right
-    `radial-gradient(140% 120% at 100% 100%, ${c} 0%, transparent 60%)`,
-    // base duotone sweep
-    `linear-gradient(135deg, ${b} 0%, ${c} 100%)`,
-  ].join(", ");
-  return { background, hue };
+export function coverFallback(): CoverFallback {
+  return { background: "#181a20" };
 }

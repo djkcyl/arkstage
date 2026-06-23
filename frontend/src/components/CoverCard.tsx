@@ -2,95 +2,131 @@ import { useMemo } from "react";
 import type { Book } from "../lib/bookshelf";
 import { cachedKey } from "../lib/bookshelf";
 import { coverFallback, coverArt } from "../lib/cover";
+import { useLongPress } from "../lib/useLongPress";
 
 interface Props {
   book: Book;
   cachedStories: Set<string>;
+  /** Story page-titles the user has read (for the green "all read" dot). */
+  readStories: Set<string>;
+  /** The last-watched story's page-title (badges the book that holds it). */
+  lastWatched: string | null;
   /** True when every story in the book is selected. */
   selected: boolean;
   /** True when some (but not all) of the book's stories are selected. */
   partial: boolean;
+  /** Multi-select mode (checkboxes shown). Entered by long-pressing any card. */
+  selectionMode: boolean;
   onOpen: (book: Book) => void;
   onToggleSelect: (book: Book) => void;
+  /** Long-press: enter selection mode and select this book. */
+  onLongPress: (book: Book) => void;
 }
 
 /**
- * One book's cinematic cover card. Renders real cover art when it loads,
- * otherwise a procedural filmic gradient seeded from the title. A bottom-left
- * title overlay (large CN + latin-ish subtitle) plus a cached indicator and a
- * card-level select checkbox (selects/clears the whole book) complete the card.
+ * One book's cinematic cover card. Tap opens the book (or toggles it in selection
+ * mode); long-press enters selection mode and selects it. A small cache dot
+ * (hidden / yellow=partial / green=all) sits top-right; the select checkbox only
+ * appears in selection mode.
  */
 export default function CoverCard({
   book,
   cachedStories,
+  readStories,
+  lastWatched,
   selected,
   partial,
+  selectionMode,
   onOpen,
   onToggleSelect,
+  onLongPress,
 }: Props) {
-  const fallback = useMemo(() => coverFallback(book.coverKey), [book.coverKey]);
+  const isLastWatched = !!lastWatched && book.pageTitles.includes(lastWatched);
+  const fallback = coverFallback();
   const art = useMemo(() => coverArt(book.coverKey), [book.coverKey]);
+  const ratio = art ? art.width / art.height : 0;
+  // Wide 联动 + 集成战略/生息演算 导引图 banners (ratio ≈ 3) keep their own wide
+  // shape; every other card is a uniform square (为了明日's 1:1) with the art
+  // center-cropped to fill. Empty cards are square too.
+  const isBanner = !!art && ratio >= 2;
+  // Only the square main-story kvs (反常光谱…) carry a large baked-in title, so
+  // they alone drop the text overlay.
+  const titleBaked = !!art && ratio >= 0.95 && ratio <= 1.05;
 
   const cachedCount = useMemo(
     () => book.pageTitles.filter((pt) => cachedStories.has(cachedKey(pt))).length,
     [book.pageTitles, cachedStories]
   );
-  const allCached = cachedCount === book.storyCount && book.storyCount > 0;
-  const pct = book.storyCount > 0 ? (cachedCount / book.storyCount) * 100 : 0;
+  const readCount = useMemo(
+    () => book.pageTitles.filter((pt) => readStories.has(pt)).length,
+    [book.pageTitles, readStories]
+  );
+  const n = book.storyCount;
+  // Status dot: none / yellow=partly downloaded / blue=all downloaded / green=all read.
+  const dotClass =
+    n > 0 && readCount === n
+      ? "read"
+      : n > 0 && cachedCount === n
+        ? "all"
+        : cachedCount > 0
+          ? "partial"
+          : "";
 
   const subtitle =
     book.chapters.length > 1
       ? `${book.chapters.length} 章 · ${book.storyCount} 剧情`
       : `${book.storyCount} 剧情`;
 
+  const press = useLongPress(
+    () => onLongPress(book),
+    () => (selectionMode ? onToggleSelect(book) : onOpen(book))
+  );
+
   return (
     <div
       className={`cover-card ${selected ? "selected" : ""}`}
-      onClick={() => onOpen(book)}
+      data-cover={book.coverKey}
       role="button"
       tabIndex={0}
+      {...press}
     >
       <div
         className="cover-art"
         style={{
           background: fallback.background,
-          aspectRatio: art ? `${art.width} / ${art.height}` : "3 / 4",
+          aspectRatio: isBanner && art ? `${art.width} / ${art.height}` : "1 / 1",
         }}
       >
-        {art && (
+        {art ? (
           <img className="cover-img" src={art.url} alt="" loading="lazy" draggable={false} />
+        ) : (
+          <img className="cover-ph" src="/logo.png" alt="" aria-hidden="true" draggable={false} />
         )}
         <div className="cover-scrim" />
         <div className="cover-meta">
-          <div className="cover-title">{book.coverKey}</div>
+          {!titleBaked && <div className="cover-title">{book.coverKey}</div>}
           <div className="cover-sub">{subtitle}</div>
         </div>
 
-        {/* Card-level multi-select: selects/clears all of the book's stories. */}
-        <button
-          className={`cover-check ${selected ? "on" : ""} ${partial ? "partial" : ""}`}
-          title={selected ? "取消选择全部剧情" : "选择全部剧情"}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleSelect(book);
-          }}
-        >
-          {selected ? "✓" : partial ? "–" : ""}
-        </button>
+        {/* Card-level multi-select (only in selection mode): selects/clears the book. */}
+        {selectionMode && (
+          <button
+            className={`cover-check ${selected ? "on" : ""} ${partial ? "partial" : ""}`}
+            title={selected ? "取消选择全部剧情" : "选择全部剧情"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleSelect(book);
+            }}
+          >
+            {selected ? "✓" : partial ? "–" : ""}
+          </button>
+        )}
 
-        {/* Cached indicator: a full pill when complete, else a thin ring/progress. */}
-        <div className={`cover-cached ${allCached ? "done" : ""}`}>
-          {allCached ? (
-            "✓ 已缓存"
-          ) : cachedCount > 0 ? (
-            <>
-              <span className="cover-ring" style={{ ["--p" as string]: `${pct}%` }} />
-              {cachedCount}/{book.storyCount}
-            </>
-          ) : (
-            <span className="cover-dim">未缓存</span>
-          )}
-        </div>
+        {/* Cache dot: hidden / yellow (partial) / green (all). */}
+        {dotClass && <span className={`cover-dot ${dotClass}`} />}
+
+        {/* "Last watched" ribbon — points the user back to where they left off. */}
+        {isLastWatched && !selectionMode && <span className="cover-last">上次观看</span>}
       </div>
     </div>
   );

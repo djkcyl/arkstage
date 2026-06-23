@@ -1,7 +1,8 @@
 import { useState, useMemo } from "react";
 import type { Book } from "../lib/bookshelf";
 import { cachedKey } from "../lib/bookshelf";
-import { coverFallback } from "../lib/cover";
+import { coverFallback, bannerArt } from "../lib/cover";
+import { useLongPress } from "../lib/useLongPress";
 import type { StoryChapter } from "../hooks/useStoryIndex";
 
 interface Props {
@@ -9,88 +10,45 @@ interface Props {
   cachedStories: Set<string>;
   /** Story page-titles the user has opened in the player (read). */
   readStories: Set<string>;
+  /** The last-watched story's page-title (tagged "上次观看" in the list). */
+  lastWatched: string | null;
   /** Currently-selected story page-titles (shared across the detail view). */
   selected: Set<string>;
-  busy: boolean;
+  /** Multi-select mode (checkboxes shown). Entered by long-pressing a story/chapter. */
+  selectionMode: boolean;
   onBack: () => void;
   onPlay: (pageTitle: string) => void;
   /** Toggle one story's selection. */
   onToggleStory: (pageTitle: string) => void;
-  /** Add or remove a batch of page-titles (whole chapter / range). */
+  /** Add or remove a batch of page-titles (whole chapter). */
   onSetMany: (pageTitles: string[], on: boolean) => void;
-  /** Download / delete just this book (hero-level shortcuts). */
-  onDownloadBook: (book: Book) => void;
-  onDeleteBook: (book: Book) => void;
-}
-
-/** Compact from–to range picker that adds a story slice to the selection. */
-function RangeSelect({
-  chapter,
-  onApply,
-}: {
-  chapter: StoryChapter;
-  onApply: (pageTitles: string[]) => void;
-}) {
-  const [from, setFrom] = useState(0);
-  const [to, setTo] = useState(Math.max(0, chapter.stories.length - 1));
-
-  const apply = () => {
-    const lo = Math.min(from, to);
-    const hi = Math.max(from, to);
-    onApply(chapter.stories.slice(lo, hi + 1).map((s) => s.page_title));
-  };
-
-  return (
-    <div className="range-select" onClick={(e) => e.stopPropagation()}>
-      <span className="range-label">范围选择</span>
-      <select value={from} onChange={(e) => setFrom(Number(e.target.value))}>
-        {chapter.stories.map((s, i) => (
-          <option key={i} value={i}>
-            {s.title}
-          </option>
-        ))}
-      </select>
-      <span className="range-dash">—</span>
-      <select value={to} onChange={(e) => setTo(Number(e.target.value))}>
-        {chapter.stories.map((s, i) => (
-          <option key={i} value={i}>
-            {s.title}
-          </option>
-        ))}
-      </select>
-      <button className="sel-btn" onClick={apply}>
-        加入选择
-      </button>
-    </div>
-  );
 }
 
 /**
- * Drill-in view for one book: a large hero (same cover art/gradient) plus its
- * chapters, each collapsible and listing its stories. Stories and whole chapters
- * are multi-selectable; each chapter also offers a from–to range picker. The
- * view is in-page state (no route push) so hardware-back stays on the shelf.
+ * Drill-in view for one book: a hero header plus its chapters, each collapsible
+ * and listing its stories. Long-press a story or chapter to enter selection mode
+ * (then the bottom bar drives download/delete); tap a story to read it. A leading
+ * dot shows state: grey (not cached) / yellow (cached) / green (read).
  */
 export default function ChapterDetail({
   book,
   cachedStories,
   readStories,
+  lastWatched,
   selected,
-  busy,
+  selectionMode,
   onBack,
   onPlay,
   onToggleStory,
   onSetMany,
-  onDownloadBook,
-  onDeleteBook,
 }: Props) {
-  const fallback = useMemo(() => coverFallback(book.coverKey), [book.coverKey]);
+  const fallback = coverFallback();
+  const banner = bannerArt(book.coverKey);
   // Default: all chapters open.
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
 
   const isCached = (pt: string) => cachedStories.has(cachedKey(pt));
   const isRead = (pt: string) => readStories.has(pt);
-  const allSelected = book.pageTitles.length > 0 && book.pageTitles.every((pt) => selected.has(pt));
 
   const cachedCount = useMemo(
     () => book.pageTitles.filter((pt) => cachedStories.has(cachedKey(pt))).length,
@@ -102,12 +60,17 @@ export default function ChapterDetail({
     return { all: sel === ch.stories.length && sel > 0, some: sel > 0 };
   };
 
+  // Dot for one story: green=read, blue=downloaded, none otherwise (a single
+  // story has no "partial", so no yellow).
+  const storyDot = (pt: string) => (isRead(pt) ? "read" : isCached(pt) ? "all" : "");
+
   return (
     <div className="chapter-detail">
-      <div className="detail-hero" style={{ background: fallback.background }}>
+      <div className={`detail-hero ${banner ? "has-banner" : ""}`} style={{ background: fallback.background }}>
+        {banner && <img className="hero-banner" src={banner} alt="" draggable={false} />}
         <div className="hero-scrim" />
-        <button className="hero-back nav-btn" onClick={onBack}>
-          ◀ 返回
+        <button className="hero-back back-icon" onClick={onBack} aria-label="返回">
+          ◀
         </button>
         <div className="hero-meta">
           <div className="hero-cat">{book.category}</div>
@@ -116,92 +79,167 @@ export default function ChapterDetail({
             {book.chapters.length > 1 ? `${book.chapters.length} 章 · ` : ""}
             {book.storyCount} 剧情 · 已缓存 {cachedCount}/{book.storyCount}
           </div>
-          <div className="hero-actions">
-            <button className="sel-btn primary" disabled={busy} onClick={() => onDownloadBook(book)}>
-              ⬇ 下载全部章节
-            </button>
-            <button
-              className="sel-btn"
-              onClick={() => onSetMany(book.pageTitles, !allSelected)}
-            >
-              {allSelected ? "✓ 全不选" : "全选章节"}
-            </button>
-            <button className="sel-btn danger" onClick={() => onDeleteBook(book)}>
-              🗑 删除缓存
-            </button>
-          </div>
         </div>
       </div>
 
       <div className="detail-body">
-        {book.chapters.map((ch, ci) => {
-          const open = !collapsed[ci];
-          const st = chapterState(ch);
-          const titles = ch.stories.map((s) => s.page_title);
-          const readCount = titles.filter((pt) => isRead(pt)).length;
-          const chRead = readCount === titles.length; // whole chapter read
-          return (
-            <div key={ci} className={`detail-chapter ${chRead ? "read" : ""}`}>
-              <div className="dc-head">
-                <button
-                  className={`dc-check ${st.all ? "on" : ""} ${st.some && !st.all ? "partial" : ""}`}
-                  title={st.all ? "取消选择本章" : "选择本章"}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSetMany(titles, !st.all);
-                  }}
-                >
-                  {st.all ? "✓" : st.some ? "–" : ""}
-                </button>
-                <button
-                  className="dc-title"
-                  onClick={() => setCollapsed((p) => ({ ...p, [ci]: !p[ci] }))}
-                >
-                  <span className={`arrow ${open ? "open" : ""}`}>▶</span>
-                  <span className="dc-name">{ch.name}</span>
-                  <span className="dc-count">
-                    {readCount > 0 && !chRead ? `已读 ${readCount}/${ch.stories.length}` : `${ch.stories.length} 剧情`}
-                  </span>
-                  {chRead && <span className="dc-read-tag">已读</span>}
-                </button>
-              </div>
-
-              {open && (
-                <>
-                  <RangeSelect chapter={ch} onApply={(pts) => onSetMany(pts, true)} />
-                  <div className="dc-stories">
-                    {ch.stories.map((s, si) => {
-                      const on = selected.has(s.page_title);
-                      const cached = isCached(s.page_title);
-                      const read = isRead(s.page_title);
-                      return (
-                        <div key={si} className={`dc-story ${on ? "sel" : ""} ${read ? "read" : ""}`}>
-                          <button
-                            className={`dc-scheck ${on ? "on" : ""}`}
-                            onClick={() => onToggleStory(s.page_title)}
-                            title={on ? "取消选择" : "选择"}
-                          >
-                            {on ? "✓" : ""}
-                          </button>
-                          <span className={`dc-dot ${cached ? "cached" : ""}`} />
-                          <span
-                            className="dc-stitle"
-                            onClick={() => onPlay(s.page_title)}
-                            title={s.page_title}
-                          >
-                            {s.title}
-                          </span>
-                          {read && <span className="dc-read-tag">已读</span>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
-          );
-        })}
+        {book.chapters.map((ch, ci) => (
+          <Chapter
+            key={ci}
+            chapter={ch}
+            open={!collapsed[ci]}
+            onToggleOpen={() => setCollapsed((p) => ({ ...p, [ci]: !p[ci] }))}
+            selected={selected}
+            lastWatched={lastWatched}
+            selectionMode={selectionMode}
+            chapterState={chapterState(ch)}
+            isCached={isCached}
+            isRead={isRead}
+            storyDot={storyDot}
+            onPlay={onPlay}
+            onToggleStory={onToggleStory}
+            onSetMany={onSetMany}
+          />
+        ))}
       </div>
+    </div>
+  );
+}
+
+function Chapter({
+  chapter: ch,
+  open,
+  onToggleOpen,
+  selected,
+  lastWatched,
+  selectionMode,
+  chapterState: st,
+  isCached,
+  isRead,
+  storyDot,
+  onPlay,
+  onToggleStory,
+  onSetMany,
+}: {
+  chapter: StoryChapter;
+  open: boolean;
+  onToggleOpen: () => void;
+  selected: Set<string>;
+  lastWatched: string | null;
+  selectionMode: boolean;
+  chapterState: { all: boolean; some: boolean };
+  isCached: (pt: string) => boolean;
+  isRead: (pt: string) => boolean;
+  storyDot: (pt: string) => string;
+  onPlay: (pt: string) => void;
+  onToggleStory: (pt: string) => void;
+  onSetMany: (pts: string[], on: boolean) => void;
+}) {
+  const titles = ch.stories.map((s) => s.page_title);
+  const readCount = titles.filter((pt) => isRead(pt)).length;
+  const chRead = titles.length > 0 && readCount === titles.length;
+  const cachedCount = titles.filter((pt) => isCached(pt)).length;
+  // Chapter dot: green=all read, blue=all downloaded, yellow=partly downloaded, none otherwise.
+  const chDot = chRead
+    ? "read"
+    : cachedCount === titles.length && titles.length > 0
+      ? "all"
+      : cachedCount > 0
+        ? "partial"
+        : "";
+
+  // Long-press the chapter title → select the whole chapter; tap → collapse.
+  const headPress = useLongPress(() => onSetMany(titles, true), onToggleOpen);
+
+  return (
+    <div className={`detail-chapter ${chRead ? "read" : ""}`}>
+      <div className="dc-head">
+        {selectionMode && (
+          <button
+            className={`dc-check ${st.all ? "on" : ""} ${st.some && !st.all ? "partial" : ""}`}
+            title={st.all ? "取消选择本章" : "选择本章"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSetMany(titles, !st.all);
+            }}
+          >
+            {st.all ? "✓" : st.some ? "–" : ""}
+          </button>
+        )}
+        <span className={`dc-dot ${chDot}`} />
+        <button className="dc-title" {...headPress}>
+          <span className={`arrow ${open ? "open" : ""}`}>▶</span>
+          <span className="dc-name">{ch.name}</span>
+          <span className="dc-count">
+            {readCount > 0 && !chRead ? `已读 ${readCount}/${ch.stories.length}` : `${ch.stories.length} 剧情`}
+          </span>
+        </button>
+      </div>
+
+      {open && (
+        <div className="dc-stories">
+          {ch.stories.map((s, si) => (
+            <Story
+              key={si}
+              title={s.title}
+              pageTitle={s.page_title}
+              on={selected.has(s.page_title)}
+              dot={storyDot(s.page_title)}
+              isLast={s.page_title === lastWatched}
+              selectionMode={selectionMode}
+              onPlay={onPlay}
+              onToggleStory={onToggleStory}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Story({
+  title,
+  pageTitle,
+  on,
+  dot,
+  isLast,
+  selectionMode,
+  onPlay,
+  onToggleStory,
+}: {
+  title: string;
+  pageTitle: string;
+  on: boolean;
+  dot: string;
+  isLast: boolean;
+  selectionMode: boolean;
+  onPlay: (pt: string) => void;
+  onToggleStory: (pt: string) => void;
+}) {
+  // Long-press → select; tap → toggle (in selection mode) or read.
+  const press = useLongPress(
+    () => onToggleStory(pageTitle),
+    () => (selectionMode ? onToggleStory(pageTitle) : onPlay(pageTitle))
+  );
+  return (
+    <div className={`dc-story ${on ? "sel" : ""} ${dot === "read" ? "read" : ""}`}>
+      {selectionMode && (
+        <button
+          className={`dc-scheck ${on ? "on" : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleStory(pageTitle);
+          }}
+          title={on ? "取消选择" : "选择"}
+        >
+          {on ? "✓" : ""}
+        </button>
+      )}
+      <span className={`dc-dot ${dot}`} />
+      <span className="dc-stitle" title={pageTitle} {...press}>
+        {title}
+      </span>
+      {isLast && <span className="dc-last-tag">上次观看</span>}
     </div>
   );
 }

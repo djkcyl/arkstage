@@ -19,3 +19,7 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# MainActivity exposes methods invoked from Rust via JNI (e.g. setReaderImmersive,
+# the player's immersive toggle). They are not referenced from Java/Kotlin, so R8
+# would strip/rename them in release builds → JNI NoSuchMethodError. Keep them.
+-keep class cn.aunly.arkstage.MainActivity { *; }

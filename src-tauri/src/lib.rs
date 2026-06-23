@@ -57,6 +57,15 @@ fn guess_content_type(path: &str) -> &'static str {
     }
 }
 
+/// Open a URL in the system browser (Android intent / desktop default browser).
+#[tauri::command]
+fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -149,6 +158,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             #[cfg(target_os = "android")]
             {
@@ -217,12 +227,16 @@ pub fn run() {
             // Network policy
             net::set_allow_online,
             net::get_allow_online,
-            // Screen orientation (player forces landscape; elsewhere free)
+            // Screen orientation (player forces landscape; elsewhere free) +
+            // immersive system-bar hiding (player only)
             android_service::set_orientation,
+            android_service::set_immersive,
             // Resource directory
             data_root::get_resource_dir,
             data_root::set_resource_dir,
             data_root::reset_resource_dir,
+            // External links (About page)
+            open_external,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

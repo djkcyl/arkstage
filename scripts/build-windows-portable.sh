@@ -58,9 +58,9 @@ echo "==> Ensuring Rust target x86_64-pc-windows-gnu"
 rustup target add x86_64-pc-windows-gnu
 
 echo "==> Building portable exe (--no-bundle: compile only, no installer)"
-# Script builds ship with the on-screen debug console enabled by default
-# (users can turn it off in Settings). Override with VITE_DEBUG_DEFAULT=false.
-export VITE_DEBUG_DEFAULT="${VITE_DEBUG_DEFAULT:-true}"
+# Release build: on-screen debug console OFF by default (users can enable it in
+# Settings) — matches build-android.sh RELEASE=1. Override with VITE_DEBUG_DEFAULT=true.
+export VITE_DEBUG_DEFAULT="${VITE_DEBUG_DEFAULT:-false}"
 npm run tauri:build -- --target x86_64-pc-windows-gnu --no-bundle
 
 REL_DIR="src-tauri/target/x86_64-pc-windows-gnu/release"

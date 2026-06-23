@@ -36,6 +36,24 @@
   color: var(--text-secondary);
 }
 
+/* Unified small back button (matches the reader's): a compact ◀ icon. */
+.back-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.4);
+  color: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .browser-content {
   flex: 1;
   overflow-y: auto;
@@ -301,6 +319,32 @@
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.5));
 }
 
+/* Whole-category select checkbox (only shown in selection mode). */
+.shelf-check {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  border: 1.5px solid var(--border);
+  color: #000;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shelf-check.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.shelf-check.partial {
+  background: rgba(244, 196, 48, 0.5);
+}
+
 .shelf-header::after {
   content: "";
   position: absolute;
@@ -365,18 +409,33 @@
 .cover-art {
   position: relative;
   width: 100%;
-  aspect-ratio: 3 / 4; /* default; overridden per-cover to the image's own ratio */
+  aspect-ratio: 1 / 1; /* uniform square (为了明日); wide 联动/mode banners override inline */
   overflow: hidden;
 }
 
-/* Real cover art (transparent cutout) layered over the gradient backing. */
+/* Cover art fills the square card, center-cropping any overflow (activity kvs are
+   a touch wider than 1:1). Banners get a card matching their own aspect, so cover
+   == no crop there. */
 .cover-img {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   user-select: none;
+}
+
+/* Empty-cover placeholder: the app logo, centered + dimmed, over the flat panel. */
+.cover-ph {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  width: 46%;
+  transform: translate(-50%, -50%);
+  opacity: 0.42;
+  filter: grayscale(0.2);
+  user-select: none;
+  pointer-events: none;
 }
 
 /* Filmic darkening so overlaid title typography always stays legible. */
@@ -452,40 +511,56 @@
   background: rgba(244, 196, 48, 0.55);
 }
 
-/* Cached indicator (top-right pill). */
-.cover-cached {
+/* Cache dot (top-right): yellow = partly cached, green = fully cached, hidden
+   when nothing cached. */
+.cover-dot {
   position: absolute;
   top: 10px;
   right: 10px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-primary);
-  background: rgba(0, 0, 0, 0.55);
-  border: 1px solid var(--border);
-  backdrop-filter: blur(2px);
-}
-
-.cover-cached.done {
-  color: #000;
-  background: var(--success);
-  border-color: var(--success);
-}
-
-.cover-dim {
-  color: var(--text-secondary);
-}
-
-/* Tiny conic progress ring for partial cache. */
-.cover-ring {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
-  background: conic-gradient(var(--accent) var(--p, 0%), rgba(255, 255, 255, 0.18) 0);
+  border: 1.5px solid rgba(0, 0, 0, 0.45);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.cover-dot.partial {
+  background: #f4c430; /* yellow — partly downloaded */
+}
+
+.cover-dot.all {
+  background: #3b82f6; /* blue — fully downloaded */
+}
+
+.cover-dot.read {
+  background: var(--success); /* green — fully read */
+}
+
+/* "Last watched" ribbon (top-left of the card). */
+.cover-last {
+  position: absolute;
+  top: 9px;
+  left: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  color: #000;
+  background: var(--accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* "Last watched" tag on a story row. */
+.dc-last-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: #000;
+  background: var(--accent);
 }
 
 /* =========================================================================
@@ -502,12 +577,33 @@
 .detail-hero {
   position: relative;
   flex-shrink: 0;
-  min-height: 240px;
-  padding: calc(16px + var(--safe-top)) 24px 22px;
+  min-height: 128px;
+  /* No --safe-top here: the parent .browser-page already reserves the status-bar
+     inset, so the hero sits below it; adding it again would double-count. */
+  padding: 10px 20px 14px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
   overflow: hidden;
+}
+
+/* With a 活动预告 banner: a short fixed height so the wide banner shows full-width
+   (no left/right crop on landscape) while keeping the header compact. */
+.detail-hero.has-banner {
+  min-height: 0;
+  height: 156px;
+}
+
+/* 活动预告 banner behind the hero (cropped to fill); the scrim fades its lower
+   half into the page background. */
+.hero-banner {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover; /* short hero on a wide screen → full width shown, no L/R crop */
+  object-position: center;
+  user-select: none;
 }
 
 .hero-scrim {
@@ -515,9 +611,9 @@
   inset: 0;
   background: linear-gradient(
     180deg,
-    rgba(0, 0, 0, 0.35) 0%,
-    rgba(0, 0, 0, 0.15) 35%,
-    rgba(0, 0, 0, 0.6) 75%,
+    rgba(0, 0, 0, 0.3) 0%,
+    rgba(0, 0, 0, 0.1) 30%,
+    rgba(0, 0, 0, 0.55) 70%,
     var(--bg-primary) 100%
   );
   pointer-events: none;
@@ -525,11 +621,16 @@
 
 .hero-back {
   position: absolute;
-  top: calc(12px + var(--safe-top));
+  /* Fixed 10px (no --safe-top): .browser-page already insets the status bar, so the
+     hero top is below it. Adding the inset again pushed the icon onto the category. */
+  top: 10px;
   left: 16px;
   z-index: 2;
 }
 
+/* Keep the text block clear of the absolute back icon (which sits in the top-left
+   ~46px): leave room on the left for the first line and never wrap the title into
+   the icon's row. */
 .hero-meta {
   position: relative;
   z-index: 1;
@@ -544,11 +645,14 @@
 }
 
 .hero-title {
-  font-size: 30px;
+  font-size: 26px;
   font-weight: 800;
   color: #fff;
   text-shadow: 0 3px 16px rgba(0, 0, 0, 0.85);
-  line-height: 1.1;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .hero-sub {
@@ -658,35 +762,6 @@
   background: rgba(244, 196, 48, 0.5);
 }
 
-/* Range picker. */
-.range-select {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 8px 0 4px 32px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.range-label {
-  font-size: 12px;
-}
-
-.range-select select {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  color: var(--text-primary);
-  border-radius: 4px;
-  padding: 4px 6px;
-  font-size: 12px;
-  max-width: 160px;
-}
-
-.range-dash {
-  color: var(--text-secondary);
-}
-
 .dc-stories {
   display: flex;
   flex-direction: column;
@@ -715,13 +790,23 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--border);
+  background: transparent; /* not downloaded → no visible dot (keeps row alignment) */
   flex-shrink: 0;
 }
 
-.dc-dot.cached {
-  background: var(--accent);
+.dc-dot.partial {
+  background: #f4c430; /* yellow — partly downloaded (chapter only) */
   box-shadow: 0 0 6px rgba(244, 196, 48, 0.7);
+}
+
+.dc-dot.all {
+  background: #3b82f6; /* blue — fully downloaded */
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.6);
+}
+
+.dc-dot.read {
+  background: var(--success); /* green — fully read */
+  box-shadow: 0 0 6px rgba(76, 175, 80, 0.6);
 }
 
 .dc-stitle {

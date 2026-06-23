@@ -3,12 +3,11 @@ import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { isDebugConsoleEnabled, setDebugPref, debugBuildDefault } from "../lib/debugSettings";
+import { isHidePlayerBack, setHidePlayerBack } from "../lib/uiSettings";
 import { isAndroid } from "../lib/platform";
-import {
-  getDownloadSettings,
-  setDownloadSettings,
-  isOfflineError,
-} from "../lib/predownload";
+import { getDownloadSettings, setDownloadSettings } from "../lib/predownload";
+import { useDownload } from "../lib/DownloadContext";
+import type { StoryIndex } from "../hooks/useStoryIndex";
 import { collectEnvInfo, copyText } from "../lib/diagnostics";
 
 interface CacheStatus {
@@ -29,13 +28,14 @@ interface ResourceDirInfo {
 export default function SettingsPage() {
   const navigate = useNavigate();
   const hideResourceDir = isAndroid();
+  const { start: startPredownload } = useDownload();
   const [nickname, setNickname] = useState("博士");
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [allowOnline, setAllowOnline] = useState(true);
   const [resDir, setResDir] = useState<ResourceDirInfo | null>(null);
   const [debugConsole, setDebugConsole] = useState(isDebugConsoleEnabled());
+  const [hidePlayerBack, setHidePlayerBackState] = useState(isHidePlayerBack());
   // Download tuning: concurrency + bandwidth limit (shown in KB/s; 0 = unlimited).
   const [concurrency, setConcurrency] = useState(4);
   const [rateLimitKbps, setRateLimitKbps] = useState(0);
@@ -45,7 +45,6 @@ export default function SettingsPage() {
     const saved = localStorage.getItem("prts-nickname");
     if (saved) setNickname(saved);
     refreshCacheStatus();
-    invoke<boolean>("get_allow_online").then(setAllowOnline).catch(() => {});
     invoke<ResourceDirInfo>("get_resource_dir").then(setResDir).catch(() => {});
     getDownloadSettings()
       .then((s) => {
@@ -53,6 +52,7 @@ export default function SettingsPage() {
         setRateLimitKbps(Math.round(s.rateLimitBps / 1024));
       })
       .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const saveDownloadSettings = async (nextConcurrency: number, nextKbps: number) => {
@@ -93,38 +93,18 @@ export default function SettingsPage() {
     }
   };
 
+  const togglePlayerBack = () => {
+    const next = !hidePlayerBack;
+    setHidePlayerBack(next);
+    setHidePlayerBackState(next);
+    showMsg(next ? "已隐藏播放器内的返回按钮（用系统返回手势）" : "已显示播放器内的返回按钮");
+  };
+
   const toggleDebugConsole = () => {
     const next = !debugConsole;
     setDebugPref(next ? "on" : "off");
     setDebugConsole(next);
     showMsg(next ? "已开启调试控制台（左下角「调试日志」）" : "已关闭调试控制台");
-  };
-
-  const toggleAllowOnline = async () => {
-    const next = !allowOnline;
-    await invoke("set_allow_online", { value: next });
-    setAllowOnline(next);
-    showMsg(next ? "已允许联网（缺失资源将自动拉取并缓存）" : "已禁止联网（缺失资源将提示获取）");
-  };
-
-  const updateGlobalData = async () => {
-    setBusy(true);
-    showMsg("正在更新全局数据...", 0);
-    try {
-      const bundle = await invoke("fetch_widget_bundle", { pageTitle: "W2G/BEG" });
-      await invoke("save_to_cache", { key: "widget-bundle-v2", data: JSON.stringify(bundle) });
-      showMsg("全局数据已更新");
-      refreshCacheStatus();
-    } catch (e) {
-      showMsg(
-        isOfflineError(e)
-          ? "当前为离线模式，无法联网获取。请先在上方「联网策略」开启联网。"
-          : `错误: ${e}`,
-        5000
-      );
-    } finally {
-      setBusy(false);
-    }
   };
 
   const refreshCacheStatus = useCallback(async () => {
@@ -157,79 +137,33 @@ export default function SettingsPage() {
     showMsg("昵称已保存");
   };
 
-  const precacheEngine = async () => {
+  // Cache the assets of EVERY story in the index (one big background download).
+  const cacheAllStories = async () => {
+    if (!confirm("将缓存全部剧情的资源，可能占用大量存储与流量，确定开始？")) return;
     setBusy(true);
-    showMsg("正在缓存引擎代码...", 0);
+    showMsg("正在获取剧情目录...", 0);
     try {
-      // Cache widget bundle
-      const bundle = await invoke("fetch_widget_bundle", { pageTitle: "W2G/BEG" });
-      await invoke("save_to_cache", {
-        key: "widget-bundle-v2",
-        data: JSON.stringify(bundle),
-      });
-
-      // Cache external JS/CSS/font files via Rust
-      const externals = [
-        { url: "https://code.jquery.com/jquery-3.7.1.min.js", category: "engine", filename: "jquery.min.js" },
-        { url: "https://static.prts.wiki/npm/PreloadJS@1.0.1/preloadjs.min.js", category: "engine", filename: "preloadjs.min.js" },
-        { url: "https://static.prts.wiki/assets/scenario/krliov.toolbox.js", category: "engine", filename: "krliov.toolbox.js" },
-        { url: "https://static.prts.wiki/assets/scenario/arknights-scenario.css", category: "engine", filename: "arknights-scenario.css" },
-        { url: "https://static.prts.wiki/assets/scenario/fonts/NotoSans.ttf", category: "engine", filename: "NotoSans.ttf" },
-      ];
-      for (const ext of externals) {
-        await invoke("download_asset", ext);
-      }
-
-      showMsg("引擎代码及依赖已全部缓存");
-      refreshCacheStatus();
-    } catch (e) {
-      showMsg(
-        isOfflineError(e)
-          ? "当前为离线模式，无法联网获取。请先在上方「联网策略」开启联网。"
-          : `错误: ${e}`,
-        5000
+      const idx = await invoke<StoryIndex>("fetch_story_index");
+      const titles = idx.categories.flatMap((c) =>
+        c.chapters.flatMap((ch) => ch.stories.map((s) => s.page_title))
       );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const precacheIndex = async () => {
-    setBusy(true);
-    showMsg("正在缓存剧情目录...", 0);
-    try {
-      const fresh = await invoke("fetch_story_index");
-      await invoke("save_to_cache", {
-        key: "story-index",
-        data: JSON.stringify(fresh),
-      });
-      showMsg("剧情目录已缓存");
-      refreshCacheStatus();
+      startPredownload(titles);
+      showMsg(`已开始缓存全部 ${titles.length} 个剧情（进度见顶部下载条）`);
     } catch (e) {
-      showMsg(
-        isOfflineError(e)
-          ? "当前为离线模式，无法联网获取。请先在上方「联网策略」开启联网。"
-          : `错误: ${e}`,
-        5000
-      );
+      showMsg(`错误: ${e instanceof Error ? e.message : String(e)}`, 5000);
     } finally {
       setBusy(false);
     }
   };
 
   const clearAllCache = async () => {
-    if (!confirm("确认清除所有缓存数据？")) return;
+    if (!confirm("确认清除所有缓存数据？（引擎已内置于软件包，不会被清除）")) return;
     try {
       await invoke("clear_cache");
       showMsg("缓存已清除");
       refreshCacheStatus();
     } catch (e) {
-      showMsg(
-        isOfflineError(e)
-          ? "当前为离线模式，无法联网获取。请先在上方「联网策略」开启联网。"
-          : `错误: ${e}`,
-        5000
-      );
+      showMsg(`错误: ${e instanceof Error ? e.message : String(e)}`, 5000);
     }
   };
 
@@ -239,15 +173,11 @@ export default function SettingsPage() {
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   };
 
-  const widgetCached = cacheStatus
-    ? cacheStatus.cached_stories.length > 0 || cacheStatus.story_index_cached
-    : false;
-
   return (
     <div className="settings-page">
       <div className="settings-content">
       <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "24px" }}>
-        <button className="nav-btn" onClick={() => navigate("/")}>◀</button>
+        <button className="back-icon" onClick={() => navigate(-1)} aria-label="返回">◀</button>
         <h1 style={{ margin: 0 }}>设置</h1>
       </div>
 
@@ -262,19 +192,6 @@ export default function SettingsPage() {
             placeholder="博士"
           />
           <button className="btn-primary" onClick={saveNickname}>保存</button>
-        </div>
-      </div>
-
-      {/* Network policy */}
-      <div className="setting-group">
-        <label>联网策略</label>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-          <button className="nav-btn" onClick={toggleAllowOnline}>
-            {allowOnline ? "联网：开" : "联网：关"}
-          </button>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
-            {allowOnline ? "缺失资源将自动从 PRTS 拉取并缓存" : "仅播放已缓存资源，缺失时提示获取"}
-          </span>
         </div>
       </div>
 
@@ -307,6 +224,19 @@ export default function SettingsPage() {
             />
             <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>0 = 不限速</span>
           </div>
+        </div>
+      </div>
+
+      {/* Hide the reader's on-screen back button */}
+      <div className="setting-group">
+        <label>播放器返回按钮</label>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          <button className="nav-btn" onClick={togglePlayerBack}>
+            {hidePlayerBack ? "隐藏播放器返回按钮：开" : "隐藏播放器返回按钮：关"}
+          </button>
+          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+            {hidePlayerBack ? "阅读时不显示返回按钮，请用系统返回手势" : "阅读时在左上角显示返回按钮"}
+          </span>
         </div>
       </div>
 
@@ -363,14 +293,8 @@ export default function SettingsPage() {
       <div className="setting-group">
         <label>缓存管理</label>
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          <button className="btn-primary" onClick={precacheEngine} disabled={busy}>
-            预缓存引擎
-          </button>
-          <button className="btn-primary" onClick={updateGlobalData} disabled={busy}>
-            更新全局数据
-          </button>
-          <button className="btn-primary" onClick={precacheIndex} disabled={busy}>
-            预缓存目录
+          <button className="btn-primary" onClick={cacheAllStories} disabled={busy}>
+            缓存全部剧情
           </button>
           <button className="btn-danger" onClick={clearAllCache} disabled={busy}>
             清除所有缓存
@@ -379,8 +303,6 @@ export default function SettingsPage() {
         <div className="cache-info" style={{ marginTop: "12px" }}>
           {cacheStatus ? (
             <>
-              <div>剧情目录: {cacheStatus.story_index_cached ? "✓ 已缓存" : "✗ 未缓存"}</div>
-              <div>引擎代码: {widgetCached ? "✓ 已缓存" : "✗ 未缓存"}</div>
               <div>已缓存剧情: {cacheStatus.cached_stories.length} 个</div>
               <div>缓存总大小: {formatBytes(cacheStatus.total_size_bytes)}</div>
             </>
@@ -390,13 +312,16 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      {/* About */}
       <div className="setting-group">
-        <label>使用说明</label>
-        <div className="cache-info">
-          <div>1. 首先点击「预缓存引擎」下载播放器所需的代码和样式</div>
-          <div>2. 点击「预缓存目录」下载剧情列表</div>
-          <div>3. 浏览和打开剧情时会自动缓存每个故事的脚本</div>
-          <div>4. 缓存后可离线阅读已缓存的剧情</div>
+        <label>关于</label>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          <button className="btn-primary" onClick={() => navigate("/about")}>
+            关于方舟剧场
+          </button>
+          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+            版本信息、免责声明、开源许可、项目与 PRTS 链接
+          </span>
         </div>
       </div>
 

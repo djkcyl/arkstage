@@ -168,6 +168,23 @@ pub fn set_orientation(landscape: bool) {
     }
 }
 
+/// Immersive fullscreen for the player ONLY (hide status + navigation bars so the
+/// reader isn't occluded); every other screen keeps the system bars visible. No-op
+/// off Android.
+#[tauri::command]
+pub fn set_immersive(enabled: bool) {
+    #[cfg(target_os = "android")]
+    {
+        if let Err(e) = imp::set_immersive(enabled) {
+            log::warn!("[android_service] set_immersive failed: {e}");
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = enabled;
+    }
+}
+
 #[cfg(target_os = "android")]
 mod imp {
     use jni::objects::{JObject, JValue};
@@ -255,6 +272,23 @@ mod imp {
             "setRequestedOrientation",
             "(I)V",
             &[JValue::Int(value)],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Call MainActivity.setReaderImmersive(boolean) — it hops to the UI thread and
+    /// hides/shows the system bars. Named to avoid the built-in Activity.setImmersive.
+    pub fn set_immersive(enabled: bool) -> Result<(), String> {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| e.to_string())?;
+        let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+        let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
+        env.call_method(
+            &activity,
+            "setReaderImmersive",
+            "(Z)V",
+            &[JValue::Bool(enabled as u8)],
         )
         .map_err(|e| e.to_string())?;
         Ok(())

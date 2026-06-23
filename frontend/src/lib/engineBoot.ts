@@ -42,19 +42,23 @@ export interface FrameBootResult {
 // External engine resources: remote URL + local cache filename. A `bundled` path
 // (relative to the app origin) means a copy ships INSIDE the app and is used
 // directly — see EXTERNALS.jquery.
+// The whole engine ("dead code": jQuery/PreloadJS/toolbox JS + the scenario CSS +
+// NotoSans font) ships INSIDE the app under frontend/public/vendor, so the player
+// always works offline, needs no "预缓存引擎" step, and survives 清除所有缓存 (the
+// cache only holds downloadable story media + index). `bundled` is a path relative
+// to the app origin used directly — no network, no cache.
 export const EXTERNALS = {
-  css: { url: "https://static.prts.wiki/assets/scenario/arknights-scenario.css", filename: "arknights-scenario.css" },
-  // jQuery is bundled in the app (frontend/public/vendor): code.jquery.com is the
-  // ONLY engine dep not on the prts.wiki CDN, and it's unreachable in some regions
-  // (notably mainland China) and on emulators with broken Chromium TLS. Loading it
-  // from the CDN made every manifest capture throw "dep load failed: …jquery…", so
-  // indexing produced no URLs and nothing downloaded. Bundling it = always offline,
-  // always fast, no network at all.
+  css: { url: "https://static.prts.wiki/assets/scenario/arknights-scenario.css", filename: "arknights-scenario.css", bundled: "vendor/arknights-scenario.css" },
   jquery: { url: "https://code.jquery.com/jquery-3.7.1.min.js", filename: "jquery.min.js", bundled: "vendor/jquery.min.js" },
-  preloadjs: { url: "https://static.prts.wiki/npm/PreloadJS@1.0.1/preloadjs.min.js", filename: "preloadjs.min.js" },
-  toolbox: { url: "https://static.prts.wiki/assets/scenario/krliov.toolbox.js", filename: "krliov.toolbox.js" },
-  font: { url: "https://static.prts.wiki/assets/scenario/fonts/NotoSans.ttf", filename: "NotoSans.ttf" },
+  preloadjs: { url: "https://static.prts.wiki/npm/PreloadJS@1.0.1/preloadjs.min.js", filename: "preloadjs.min.js", bundled: "vendor/preloadjs.min.js" },
+  toolbox: { url: "https://static.prts.wiki/assets/scenario/krliov.toolbox.js", filename: "krliov.toolbox.js", bundled: "vendor/krliov.toolbox.js" },
+  font: { url: "https://static.prts.wiki/assets/scenario/fonts/NotoSans.ttf", filename: "NotoSans.ttf", bundled: "vendor/NotoSans.ttf" },
 };
+
+/** Absolute app-origin URL for a bundled asset path (e.g. "vendor/x.js"). */
+function bundledUrl(rel: string): string {
+  return new URL(rel, `${window.location.origin}/`).href;
+}
 
 // Count of engine script blocks in the last boot (for the diagnostic probe).
 let bundleScriptCount = 0;
@@ -307,13 +311,24 @@ function buildShimCode(): string {
  */
 async function loadCssInDoc(idoc: Document, localFontUrl: string): Promise<void> {
   let cssText: string | null = null;
-  try {
-    cssText = await invoke<string | null>("read_asset_text", {
-      category: "engine",
-      filename: EXTERNALS.css.filename,
-    });
-  } catch {
-    // fall through to proxy fetch
+  // Bundled-in-app copy first (no network, no cache).
+  if (EXTERNALS.css.bundled) {
+    try {
+      const r = await fetch(bundledUrl(EXTERNALS.css.bundled));
+      if (r.ok) cssText = await r.text();
+    } catch {
+      // fall through
+    }
+  }
+  if (!cssText) {
+    try {
+      cssText = await invoke<string | null>("read_asset_text", {
+        category: "engine",
+        filename: EXTERNALS.css.filename,
+      });
+    } catch {
+      // fall through to proxy fetch
+    }
   }
   if (!cssText) {
     try {
@@ -342,6 +357,8 @@ async function loadCssInDoc(idoc: Document, localFontUrl: string): Promise<void>
 
 /** Download the font if not cached, returning a local asset URL or proxy URL. */
 async function ensureFontCached(): Promise<string> {
+  // Bundled-in-app font first (no network, no cache).
+  if (EXTERNALS.font.bundled) return bundledUrl(EXTERNALS.font.bundled);
   try {
     const existing = await invoke<string | null>("get_asset_path", {
       category: "engine",

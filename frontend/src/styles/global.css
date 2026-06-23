@@ -12,6 +12,9 @@
   --border: #404040;
   --success: #4caf50;
   --error: #f44336;
+  /* The status bar is visible on every screen except the player (which goes immersive
+     via set_immersive), so top-level page containers reserve this inset. Children of
+     an already-inset container (e.g. inside .browser-page) must NOT add it again. */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
@@ -135,4 +138,169 @@ input {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+/* ===== Home page ===== */
+.home-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 18px;
+  padding: 24px;
+  padding-top: calc(24px + var(--safe-top));
+  text-align: center;
+}
+.home-logo {
+  width: 104px;
+  height: 104px;
+  filter: drop-shadow(0 8px 24px rgba(0, 0, 0, 0.5));
+}
+.home-title {
+  font-size: 32px;
+  color: var(--accent);
+  font-weight: bold;
+}
+.home-tagline {
+  color: var(--text-secondary);
+  font-size: 15px;
+}
+.home-features {
+  list-style: none;
+  max-width: 580px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.home-features li {
+  position: relative;
+  padding-left: 16px;
+}
+.home-features li::before {
+  content: "·";
+  position: absolute;
+  left: 2px;
+  color: var(--accent);
+  font-weight: 700;
+}
+.home-actions {
+  display: flex;
+  gap: 16px;
+}
+.home-version {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: none;
+}
+.home-version.has-update {
+  color: var(--error);
+  font-weight: 700;
+}
+.blink {
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink {
+  to {
+    opacity: 0.35;
+  }
+}
+
+/* ===== About page ===== */
+.about-page {
+  height: 100%;
+  overflow-y: auto;
+  padding: calc(12px + var(--safe-top)) 20px calc(20px + var(--safe-bottom));
+}
+.about-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.about-head h1 {
+  font-size: 20px;
+  color: var(--accent);
+}
+.about-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.about-logo {
+  width: 84px;
+  height: 84px;
+  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.5));
+}
+.about-name {
+  font-size: 18px;
+  font-weight: 700;
+}
+.about-ver {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+}
+.about-links {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+.about-link {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+.about-rows {
+  width: 100%;
+  max-width: 580px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.about-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 14px 16px;
+  font-size: 15px;
+}
+.about-row:first-child {
+  border-radius: 8px 8px 0 0;
+}
+.about-row:last-child {
+  border-radius: 0 0 8px 8px;
+}
+.about-arrow {
+  color: var(--text-secondary);
+  font-size: 18px;
+}
+.about-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  font-family: inherit;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 8px;
 }

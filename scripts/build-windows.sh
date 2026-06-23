@@ -59,9 +59,9 @@ echo "==> Ensuring Rust target x86_64-pc-windows-gnu"
 rustup target add x86_64-pc-windows-gnu
 
 echo "==> Building (no --bundles: tauri picks the target's bundlers; MSI is skipped on Linux)"
-# Script builds ship with the on-screen debug console enabled by default
-# (users can turn it off in Settings). Override with VITE_DEBUG_DEFAULT=false.
-export VITE_DEBUG_DEFAULT="${VITE_DEBUG_DEFAULT:-true}"
+# Release build: on-screen debug console OFF by default (users can enable it in
+# Settings) — matches build-android.sh RELEASE=1. Override with VITE_DEBUG_DEFAULT=true.
+export VITE_DEBUG_DEFAULT="${VITE_DEBUG_DEFAULT:-false}"
 npm run tauri:build -- --target x86_64-pc-windows-gnu
 
 installer="$(ls -1 "$TRIPLE_DIR/release/bundle/nsis/"*-setup.exe 2>/dev/null | head -1 || true)"

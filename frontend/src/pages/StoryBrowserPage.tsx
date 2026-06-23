@@ -1,10 +1,10 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useStoryIndex } from "../hooks/useStoryIndex";
 import { useDownload } from "../lib/DownloadContext";
 import { buildShelves } from "../lib/bookshelf";
-import { getReadStories } from "../lib/readState";
+import { getReadStories, getLastWatched } from "../lib/readState";
 import type { Book, Shelf } from "../lib/bookshelf";
 import CoverCard from "../components/CoverCard";
 import ChapterDetail from "../components/ChapterDetail";
@@ -22,42 +22,56 @@ export default function StoryBrowserPage() {
   const [search, setSearch] = useState("");
   const [cachedStories, setCachedStories] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  // Restore the drilled-in book when returning from the player (it's a separate
-  // route, so this component remounts). A stub {category,coverKey} is enough —
-  // `liveBook` resolves it to the full book from the (always-present) index.
-  const [openBook, setOpenBook] = useState<Book | null>(() => {
-    try {
-      const raw = sessionStorage.getItem("arkstage-open-book");
-      if (!raw) return null;
-      const { category, coverKey } = JSON.parse(raw);
-      return { category, coverKey, chapters: [], pageTitles: [], storyCount: 0 } as Book;
-    } catch {
-      return null;
-    }
-  });
-  // Read stories (refreshed on mount + when a download finishes, i.e. on return).
-  const [readStories, setReadStories] = useState<Set<string>>(() => getReadStories());
-  const { start: startPredownload, busy, status, onFinished } = useDownload();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // The drilled-in book lives in the URL (?cat=&book=) so it's its own history
+  // entry: hardware/gesture back pops 章节 → 书架 (one level), and it survives the
+  // player route's remount on return. A stub {category,coverKey} is enough —
+  // `liveBook` resolves it to the full book from the (always-present) index.
+  const openCategory = searchParams.get("cat");
+  const openCover = searchParams.get("book");
+  const openBook: Book | null = useMemo(
+    () =>
+      openCover
+        ? ({ category: openCategory ?? "", coverKey: openCover, chapters: [], pageTitles: [], storyCount: 0 } as Book)
+        : null,
+    [openCategory, openCover]
+  );
+  // Drill into a book by pushing a history entry; back (hardware or ◀) pops it.
+  const openBookCard = useCallback(
+    (book: Book) => setSearchParams({ cat: book.category, book: book.coverKey }),
+    [setSearchParams]
+  );
 
-  // Persist the open book so returning from the player lands back on it (#2).
+  // On every drill in/out: clear any pending selection so the bottom bar doesn't
+  // leak across pages (task 1). Returning to the shelf also scrolls the book we
+  // just left back to the centre of the screen (task 6).
+  const prevOpen = useRef<string | null>(openCover);
   useEffect(() => {
-    try {
-      if (openBook)
-        sessionStorage.setItem(
-          "arkstage-open-book",
-          JSON.stringify({ category: openBook.category, coverKey: openBook.coverKey })
-        );
-      else sessionStorage.removeItem("arkstage-open-book");
-    } catch {
-      /* ignore */
+    const left = prevOpen.current;
+    prevOpen.current = openCover;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelected(new Set());
+    if (!openCover && left) {
+      requestAnimationFrame(() => {
+        const sel = `[data-cover="${left.replace(/["\\]/g, "\\$&")}"]`;
+        document.querySelector(sel)?.scrollIntoView({ block: "center" });
+      });
     }
-  }, [openBook]);
+  }, [openCover]);
+  // Read stories + last-watched (refreshed on mount + window focus, i.e. on return
+  // from the player).
+  const [readStories, setReadStories] = useState<Set<string>>(() => getReadStories());
+  const [lastWatched, setLastWatchedState] = useState<string | null>(() => getLastWatched());
+  const { start: startPredownload, busy, status, onFinished } = useDownload();
 
-  // Re-read the read-state set whenever the window regains focus (e.g. after the
-  // player route unmounts back to here).
+  // Re-read read-state + last-watched whenever the window regains focus (e.g.
+  // after the player route unmounts back to here).
   useEffect(() => {
-    const refresh = () => setReadStories(getReadStories());
+    const refresh = () => {
+      setReadStories(getReadStories());
+      setLastWatchedState(getLastWatched());
+    };
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
   }, []);
@@ -147,11 +161,20 @@ export default function StoryBrowserPage() {
 
   const clearSelection = () => setSelected(new Set());
 
-  const selectAllVisible = () => {
-    const all: string[] = [];
-    if (liveBook) all.push(...liveBook.pageTitles);
-    else for (const shelf of filtered) for (const b of shelf.books) all.push(...b.pageTitles);
-    setSelected(new Set(all));
+  // Selection mode is on whenever something is selected; long-press enters it.
+  const selectionMode = selected.size > 0;
+  const enterSelect = (book: Book) => setMany(book.pageTitles, true);
+
+  // Whole-category (shelf) select state + toggle.
+  const shelfTitles = (shelf: Shelf) => shelf.books.flatMap((b) => b.pageTitles);
+  const shelfSelState = (shelf: Shelf): { selected: boolean; partial: boolean } => {
+    const pts = shelfTitles(shelf);
+    const sel = pts.filter((pt) => selected.has(pt)).length;
+    return { selected: sel === pts.length && sel > 0, partial: sel > 0 };
+  };
+  const toggleShelf = (shelf: Shelf) => {
+    const pts = shelfTitles(shelf);
+    setMany(pts, !pts.every((pt) => selected.has(pt)));
   };
 
   // ----- play / download / delete -----
@@ -178,9 +201,6 @@ export default function StoryBrowserPage() {
     }
   };
 
-  const downloadBook = (book: Book) => startPredownload(book.pageTitles);
-  const deleteBook = (book: Book) => deleteTitles(book.pageTitles, book.coverKey);
-
   const batchDownload = () => startPredownload([...selected]);
   const batchDelete = () =>
     deleteTitles([...selected], `${selected.size} 个剧情`, clearSelection);
@@ -205,7 +225,7 @@ export default function StoryBrowserPage() {
       {!liveBook && (
         <>
           <div className="browser-header">
-            <button className="nav-btn" onClick={() => navigate("/")}>
+            <button className="back-icon" onClick={() => navigate(-1)} aria-label="返回">
               ◀
             </button>
             <h1>剧情书架</h1>
@@ -216,27 +236,27 @@ export default function StoryBrowserPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-            <button
-              className="nav-btn"
-              onClick={selectAllVisible}
-              title="选择当前全部剧情"
-            >
-              全选
-            </button>
-            {selected.size > 0 && (
-              <button className="nav-btn" onClick={clearSelection} title="取消全部选择">
-                全不选
-              </button>
-            )}
-            <button className="nav-btn" onClick={refresh} title="刷新">
-              ↻
-            </button>
+            {/* Multi-select is entered by long-pressing a card; 全选/清空 live in
+                the bottom selection bar. The index auto-refreshes in the
+                background, so there's no manual refresh button. */}
           </div>
 
           <div className="browser-content shelf-content">
             {filtered.map((shelf) => (
               <section key={shelf.category} className="shelf">
                 <div className="shelf-header">
+                  {selectionMode && (() => {
+                    const ss = shelfSelState(shelf);
+                    return (
+                      <button
+                        className={`shelf-check ${ss.selected ? "on" : ""} ${ss.partial && !ss.selected ? "partial" : ""}`}
+                        title={ss.selected ? "取消选择本类" : "选择本类全部"}
+                        onClick={() => toggleShelf(shelf)}
+                      >
+                        {ss.selected ? "✓" : ss.partial ? "–" : ""}
+                      </button>
+                    );
+                  })()}
                   {storylineIcon(shelf.category) && (
                     <img
                       className="shelf-icon"
@@ -246,7 +266,7 @@ export default function StoryBrowserPage() {
                     />
                   )}
                   <span className="shelf-title">{shelf.category}</span>
-                  <span className="shelf-count">{shelf.books.length} 本</span>
+                  <span className="shelf-count">{shelf.books.length} 章</span>
                 </div>
                 <div className="cover-grid">
                   {shelf.books.map((book) => {
@@ -256,10 +276,14 @@ export default function StoryBrowserPage() {
                         key={book.coverKey}
                         book={book}
                         cachedStories={cachedStories}
+                        readStories={readStories}
+                        lastWatched={lastWatched}
                         selected={st.selected}
                         partial={st.partial && !st.selected}
-                        onOpen={setOpenBook}
+                        selectionMode={selectionMode}
+                        onOpen={openBookCard}
                         onToggleSelect={toggleBook}
+                        onLongPress={enterSelect}
                       />
                     );
                   })}
@@ -277,14 +301,13 @@ export default function StoryBrowserPage() {
           book={liveBook}
           cachedStories={cachedStories}
           readStories={readStories}
+          lastWatched={lastWatched}
           selected={selected}
-          busy={busy}
-          onBack={() => setOpenBook(null)}
+          selectionMode={selectionMode}
+          onBack={() => navigate(-1)}
           onPlay={playStory}
           onToggleStory={toggleStory}
           onSetMany={setMany}
-          onDownloadBook={downloadBook}
-          onDeleteBook={deleteBook}
         />
       )}
 
@@ -292,7 +315,6 @@ export default function StoryBrowserPage() {
         count={selected.size}
         busy={busy}
         downloadActive={status !== null}
-        onSelectAll={selectAllVisible}
         onClear={clearSelection}
         onDownload={batchDownload}
         onDelete={batchDelete}

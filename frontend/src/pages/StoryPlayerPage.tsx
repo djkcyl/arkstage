@@ -4,8 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { bootEngineInFrame } from "../lib/engineBoot";
 import { loadBundle } from "../lib/predownload";
 import { setReading } from "../lib/keepalive";
-import { markRead } from "../lib/readState";
+import { markRead, setLastWatched } from "../lib/readState";
 import { setLandscape } from "../lib/orientation";
+import { setImmersive } from "../lib/immersive";
+import { useHidePlayerBack } from "../lib/uiSettings";
 
 /**
  * Story player page — loads the ORIGINAL PRTS ScenarioSimulator engine via bootEngine().
@@ -20,6 +22,7 @@ interface StoryPageData {
 export default function StoryPlayerPage() {
   const { pageTitle } = useParams<{ pageTitle: string }>();
   const navigate = useNavigate();
+  const hidePlayerBack = useHidePlayerBack();
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("正在加载...");
@@ -33,12 +36,23 @@ export default function StoryPlayerPage() {
     return () => setReading(false);
   }, []);
 
-  // The player is the ONLY screen forced to landscape; restore free orientation
-  // on leave. (No-op off Android.)
+  // Record this as the "last watched" story on entry; only mark it READ after
+  // 30s in the reader (so merely peeking in doesn't count). Leaving early cancels.
+  useEffect(() => {
+    if (!decodedTitle) return;
+    setLastWatched(decodedTitle);
+    const t = setTimeout(() => markRead(decodedTitle), 30_000);
+    return () => clearTimeout(t);
+  }, [decodedTitle]);
+
+  // The player is the ONLY screen forced to landscape AND the only one that hides
+  // the system bars (immersive); both are restored on leave. (No-op off Android.)
   useEffect(() => {
     setLandscape(true);
+    setImmersive(true);
     return () => {
       setLandscape(false);
+      setImmersive(false);
     };
   }, []);
 
@@ -83,7 +97,6 @@ export default function StoryPlayerPage() {
           isCancelled: () => cancelled,
         });
 
-        markRead(decodedTitle); // opened in the player → counts as read
         setLoading(false);
       } catch (e) {
         if (!cancelled) {
@@ -108,7 +121,9 @@ export default function StoryPlayerPage() {
     };
   }, [decodedTitle]);
 
-  const handleBack = () => navigate("/browse");
+  // Pop one history level (back to the 章节 detail we came from), so hardware
+  // back and this button behave identically.
+  const handleBack = () => navigate(-1);
 
   if (error) {
     return (
@@ -121,7 +136,7 @@ export default function StoryPlayerPage() {
 
   return (
     <div style={{ width: "100%", height: "100%", background: "#000", position: "relative" }}>
-      <button onClick={handleBack} style={backBtnStyle}>◀ 返回</button>
+      {!hidePlayerBack && <button onClick={handleBack} style={backBtnStyle} aria-label="返回" title="返回">◀</button>}
 
       {loading && (
         <div style={centerStyle}>
@@ -157,17 +172,25 @@ const btnStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
+// Small, unobtrusive icon-only back button in the corner (the reader is meant to
+// be immersive; the system back gesture also works).
 const backBtnStyle: React.CSSProperties = {
   position: "fixed",
-  top: "calc(8px + env(safe-area-inset-top, 0px))",
-  left: "calc(8px + env(safe-area-inset-left, 0px))",
+  top: "calc(6px + var(--safe-top))",
+  left: "calc(6px + var(--safe-left))",
   zIndex: 9999,
-  padding: "4px 12px",
-  background: "rgba(0,0,0,0.6)",
-  color: "white",
-  border: "1px solid rgba(255,255,255,0.3)",
-  borderRadius: "3px",
+  width: "30px",
+  height: "30px",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 0,
+  background: "rgba(0,0,0,0.4)",
+  color: "rgba(255,255,255,0.85)",
+  border: "1px solid rgba(255,255,255,0.22)",
+  borderRadius: "50%",
   cursor: "pointer",
-  fontSize: "13px",
+  fontSize: "14px",
+  lineHeight: 1,
 };
 

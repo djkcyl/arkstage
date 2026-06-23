@@ -25,3 +25,23 @@ export function markRead(pageTitle: string): void {
     /* storage unavailable — read state is best-effort */
   }
 }
+
+// "Last watched" — the most recently opened story (by page_title), so the shelf
+// and chapter list can point the user back to where they left off ("上次观看").
+const LAST_KEY = "arkstage-last-watched";
+
+export function getLastWatched(): string | null {
+  try {
+    return localStorage.getItem(LAST_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setLastWatched(pageTitle: string): void {
+  try {
+    localStorage.setItem(LAST_KEY, pageTitle);
+  } catch {
+    /* best-effort */
+  }
+}

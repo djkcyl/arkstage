@@ -3,7 +3,6 @@ interface Props {
   busy: boolean;
   /** Whether a download is currently visible (so we stack above its bar). */
   downloadActive: boolean;
-  onSelectAll: () => void;
   onClear: () => void;
   onDownload: () => void;
   onDelete: () => void;
@@ -19,7 +18,6 @@ export default function SelectionBar({
   count,
   busy,
   downloadActive,
-  onSelectAll,
   onClear,
   onDownload,
   onDelete,
@@ -31,17 +29,14 @@ export default function SelectionBar({
         已选 <strong>{count}</strong> 个剧情
       </span>
       <div className="sel-actions">
-        <button className="sel-btn" onClick={onSelectAll}>
-          全选
-        </button>
         <button className="sel-btn" onClick={onClear}>
           清空
         </button>
         <button className="sel-btn primary" disabled={busy} onClick={onDownload}>
-          ⬇ 批量下载
+          ⬇ 下载
         </button>
         <button className="sel-btn danger" onClick={onDelete}>
-          🗑 批量删除
+          🗑 删除
         </button>
       </div>
     </div>

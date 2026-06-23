@@ -1,7 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useState, useEffect, useCallback } from "react";
-// Index bundled in the app: the offline baseline, refreshable from prts.wiki.
-import bundledIndex from "../data/story-index.json";
 import { regroupStoryIndex } from "../lib/storylines";
 
 export interface StoryIndex {
@@ -53,11 +51,9 @@ export function useStoryIndex() {
         return;
       }
 
-      // No cache — show the bundled index instantly (offline baseline), then try
-      // to refresh from prts.wiki in the background (no-op if offline).
-      setIndex(regroupStoryIndex(bundledIndex as StoryIndex));
-      setLoading(false);
-      refreshIndex(setIndex).catch(() => {});
+      // No cache — fetch from prts.wiki (the index is no longer bundled). On the
+      // first launch this needs a network connection; the error path offers retry.
+      await refreshIndex(setIndex);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

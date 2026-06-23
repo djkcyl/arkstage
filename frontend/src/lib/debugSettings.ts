@@ -1,15 +1,17 @@
 /**
  * Controls whether the on-screen debug console (DebugConsole) is visible.
  *
- * Default is build-time: CI/release workflows and the build scripts set
- * VITE_DEBUG_DEFAULT=true so those artifacts ship with diagnostics on; an
- * ordinary `npm run tauri:build` leaves it off. The user can override the default
+ * Default is build-time. The OFFICIAL RELEASE ships with diagnostics OFF
+ * (release.yml + the build-* release scripts set VITE_DEBUG_DEFAULT=false).
+ * Every other build keeps it ON: the dev server (import.meta.env.DEV), debug
+ * APKs and CI test artifacts (VITE_DEBUG_DEFAULT=true). The user can override
  * either way from Settings; the choice is persisted in localStorage and survives
  * across launches. "default" means "follow the build-time default".
  */
 
 const STORAGE_KEY = "prts-debug-console";
-const BUILD_DEFAULT = import.meta.env.VITE_DEBUG_DEFAULT === "true";
+const BUILD_DEFAULT =
+  import.meta.env.VITE_DEBUG_DEFAULT === "true" || import.meta.env.DEV === true;
 
 export type DebugPref = "on" | "off" | "default";
 

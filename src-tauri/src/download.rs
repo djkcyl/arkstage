@@ -26,7 +26,7 @@ use tauri::{AppHandle, Emitter, Manager as _};
 
 /// Default number of concurrent workers per job (jsd default). Configurable at
 /// runtime (D2).
-const DEFAULT_CONCURRENCY: usize = 8;
+const DEFAULT_CONCURRENCY: usize = 4;
 /// Minimum gap between progress events for one job, to avoid event storms.
 const PROGRESS_THROTTLE_MS: u128 = 150;
 /// How long a worker waits when the queue is momentarily empty but the producer

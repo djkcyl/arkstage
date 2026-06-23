@@ -1,0 +1,45 @@
+# Regenerate the StoryLine taxonomy (frontend/src/data/storylines.json) from
+# prts.wiki, on manual demand. Runs the SAME script as local use
+# (tools/gen-index/gen-storylines.mjs) and commits storylines.json if it changed.
+# The story index itself is no longer bundled — it's fetched at runtime from prts.
+name: update-storylines
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-storylines
+  cancel-in-progress: false
+
+jobs:
+  update-storylines:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install deps
+        working-directory: tools/gen-index
+        run: npm install --no-audit --no-fund
+
+      - name: Regenerate StoryLine taxonomy
+        run: node tools/gen-index/gen-storylines.mjs
+
+      - name: Commit if changed
+        run: |
+          git config user.name "arkstage-index[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/data/storylines.json
+          if git diff --cached --quiet; then
+            echo "Taxonomy already up to date — nothing to commit."
+            exit 0
+          fi
+          git commit -m "chore(taxonomy): refresh storylines.json from prts.wiki [skip ci]"
+          git push

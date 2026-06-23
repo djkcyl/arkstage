@@ -70,9 +70,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Released builds ship with the debug console enabled by default
-          # (users can turn it off in Settings).
-          VITE_DEBUG_DEFAULT: "true"
+          # The official release ships with the debug console OFF by default
+          # (users can still enable it in Settings).
+          VITE_DEBUG_DEFAULT: "false"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "方舟剧场 ${{ github.ref_name }}"
@@ -82,11 +82,12 @@ jobs:
           args: ${{ matrix.args }}
 
   # Android isn't a tauri-action target, so build the per-ABI APKs separately and
-  # attach them to the same release. Ships arm64-v8a (phones) + x86_64 (emulators/
-  # x86 devices); 32-bit is dropped by design. Signed with the real keystore when
-  # the ANDROID_KEYSTORE_* secrets are set, otherwise debug-signed (still installs).
+  # attach it to the same release. Ships arm64-v8a only (real 64-bit phones);
+  # x86_64 (emulator) and 32-bit are dropped — no real target needs them. Signed
+  # with the real keystore when the ANDROID_KEYSTORE_* secrets are set, otherwise
+  # debug-signed (still installs).
   android:
-    name: Release (Android arm64-v8a + x86_64)
+    name: Release (Android arm64-v8a)
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -114,7 +115,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -143,27 +144,24 @@ jobs:
             echo "No ANDROID_KEYSTORE_BASE64 secret — falling back to debug signing."
           fi
 
-      - name: Build per-ABI release APKs (arm64-v8a + x86_64)
+      - name: Build arm64-v8a release APK
         env:
-          # Released builds ship with the debug console enabled by default
-          # (users can turn it off in Settings) — matches the desktop release.
-          VITE_DEBUG_DEFAULT: "true"
+          # The official release ships with the debug console OFF by default
+          # (users can still enable it in Settings) — matches the desktop release.
+          VITE_DEBUG_DEFAULT: "false"
           ANDROID_KEYSTORE_PATH: ${{ steps.keystore.outputs.path }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: npm run tauri android build -- --apk --target aarch64 --target x86_64 --split-per-abi
+        run: npm run tauri android build -- --apk --target aarch64 --split-per-abi
 
-      - name: Collect and rename APKs
+      - name: Collect and rename APK
         run: |
           out=src-tauri/gen/android/app/build/outputs/apk
           mkdir -p dist-apk
           arm=$(find "$out" -path '*arm64*' -name '*release*.apk' | head -1)
-          x86=$(find "$out" -path '*x86_64*' -name '*release*.apk' | head -1)
           test -n "$arm" || { echo "::error::arm64-v8a APK not found under $out"; find "$out" -name '*.apk'; exit 1; }
-          test -n "$x86" || { echo "::error::x86_64 APK not found under $out"; find "$out" -name '*.apk'; exit 1; }
           cp "$arm" "dist-apk/arkstage-${{ github.ref_name }}-android-arm64-v8a.apk"
-          cp "$x86" "dist-apk/arkstage-${{ github.ref_name }}-android-x86_64.apk"
           ls -lh dist-apk
 
       - name: Attach APKs to the release
