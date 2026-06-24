@@ -1,8 +1,10 @@
 import { getVersion } from "@tauri-apps/api/app";
 
-// App version + update check. The current version comes from the Tauri app
-// metadata (tauri.conf.json). The latest is checked jsDelivr-first (fast/reachable
-// in CN), GitHub API as fallback; both read the repo's newest release tag.
+// App version + update check. `current` comes from the Tauri app metadata. `latest`
+// is checked jsDelivr-first (reachable in CN), GitHub API as fallback. jsDelivr's
+// tag/packages API 502s for this repo, so jsd reads package.json off the CDN's
+// master branch ref — its `version` is bumped to the latest release on every
+// release (see CLAUDE.md), so it doubles as a CN-reachable "latest version" source.
 
 export const REPO = "djkcyl/arkstage";
 export const GITHUB_URL = `https://github.com/${REPO}`;
@@ -31,14 +33,18 @@ function cmp(a: string, b: string): number {
 }
 
 async function latestViaJsd(): Promise<string> {
-  const r = await fetch(`https://data.jsdelivr.com/v1/packages/gh/${REPO}`, {
+  // jsDelivr's packages/resolve API 502s for this repo, but the CDN's branch refs
+  // work. master's package.json `version` always equals the latest release (we bump
+  // it on every release), so it's a reliable CN-reachable "latest version" source.
+  // Caveat: jsd caches mutable refs (~12h), so detection can lag a release slightly;
+  // the GitHub fallback is immediate.
+  const r = await fetch(`https://cdn.jsdelivr.net/gh/${REPO}@master/package.json`, {
     signal: AbortSignal.timeout(8000),
   });
   if (!r.ok) throw new Error(`jsd HTTP ${r.status}`);
   const d = await r.json();
-  const v = d?.tags?.latest || d?.versions?.[0]?.version;
-  if (!v) throw new Error("jsd: no version");
-  return norm(v);
+  if (!d?.version) throw new Error("jsd: no version");
+  return norm(d.version);
 }
 
 async function latestViaGithub(): Promise<string> {
@@ -60,25 +66,32 @@ async function latestViaGithub(): Promise<string> {
  */
 export async function checkForUpdate(): Promise<UpdateInfo | null> {
   const current = await getVersion().catch(() => "");
+  console.info("[update] current version:", current || "(unknown)");
   if (!current) return null;
   let latest: string;
   let channel: "jsd" | "github";
   try {
     latest = await latestViaJsd();
     channel = "jsd";
-  } catch {
+    console.info("[update] jsDelivr latest =", latest);
+  } catch (e) {
+    console.warn("[update] jsDelivr failed, falling back to GitHub:", String(e));
     try {
       latest = await latestViaGithub();
       channel = "github";
-    } catch {
+      console.info("[update] GitHub latest =", latest);
+    } catch (e2) {
+      console.error("[update] both update sources failed:", String(e2));
       return null;
     }
   }
-  return {
+  const info: UpdateInfo = {
     current,
     latest,
     hasUpdate: cmp(latest, current) > 0,
     channel,
     url: `${GITHUB_URL}/releases/latest`,
   };
+  console.info("[update] result:", JSON.stringify(info));
+  return info;
 }

@@ -5,6 +5,7 @@ import StoryBrowserPage from "./pages/StoryBrowserPage";
 import StoryPlayerPage from "./pages/StoryPlayerPage";
 import SettingsPage from "./pages/SettingsPage";
 import AboutPage from "./pages/AboutPage";
+import HelpPage from "./pages/HelpPage";
 import DebugConsole from "./components/DebugConsole";
 import DownloadBar from "./components/DownloadBar";
 import { DownloadProvider } from "./lib/DownloadContext";
@@ -31,6 +32,7 @@ export default function App() {
           <Route path="/play/:pageTitle" element={<StoryPlayerPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/about" element={<AboutPage />} />
+          <Route path="/help" element={<HelpPage />} />
         </Routes>
         {/* High-priority, app-wide download progress (hidden inside the reader). */}
         <DownloadBar />

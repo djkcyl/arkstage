@@ -1,223 +1,125 @@
 # 方舟剧场（Arkstage）
 
-**方舟剧场** 是一个明日方舟（Arknights）剧情的**离线演出回放器**——不是文字阅读器，而是把游戏内的演出**原样重新上演**。它把 [PRTS Wiki](https://prts.wiki) 上的**原版剧情演出引擎**（ScenarioSimulator）搬进一个跨平台桌面应用里运行——带立绘、背景、配音与对话动画——并支持在不限量网络下**预下载**指定范围的资源，之后在无网或计费网络环境下**完全离线**播放。
+方舟剧场是一个明日方舟（Arknights）剧情的离线演出回放器。它把 [PRTS Wiki](https://prts.wiki) 的原版演出引擎（ScenarioSimulator）搬进一个跨平台应用里运行，呈现与游戏内一致的立绘、背景、配音与对话动画，并支持预下载后在无网或计费网络环境下完全离线播放。支持 Android 与桌面（Windows / macOS / Linux）。
 
-[![CI](https://github.com/djkcyl/arkstage/actions/workflows/ci.yml/badge.svg)](https://github.com/djkcyl/arkstage/actions/workflows/ci.yml)
+---
 
-> 基于 **Tauri 2 + React 19 + TypeScript**。桌面端复用 Wiki 原生引擎，不自研渲染器，最大程度还原游戏内演出。
+## ⚠️ 免责声明
+
+- 本项目是非官方的同人 / 学习性质作品，与上海鹰角网络（Hypergryph）及 PRTS Wiki 没有任何隶属或合作关系。
+- 剧情文本、立绘、音频、背景等素材均来自 PRTS Wiki，版权归《明日方舟》/ 鹰角网络所有。本应用自身不存储或分发这些素材，只在运行时从 PRTS 获取并缓存到本地，供个人离线查阅。
+- 请合理使用，控制下载频率以免对 PRTS 源站造成压力，勿用于任何商业用途。
+- 剧情内容的准确性、立绘是否缺失等取决于上游 PRTS Wiki，本应用对此不作担保。
 
 ---
 
 ## ✨ 功能特性
 
-- **原版演出还原**：直接运行 PRTS Wiki 的 ScenarioSimulator 引擎，背景 / 立绘 / 对话 / 配音与网页端一致。
-- **真离线**：预下载后可在断网环境完整播放，运行时资源一律走本地。
-- **按范围预下载**：可按单剧情 / 章节 / 分类批量下载，并通过引擎自身的资源清单精确获取所需文件。
-- **内容寻址去重**：相同资源（跨章节复用的立绘、音乐等）只下载与存储一份。
-- **联网策略开关**：允许联网时自动拉取并缓存缺失资源；禁止联网时仅播放已缓存内容。
-- **博士昵称**：替换剧情文本中的 `{@nickname}` 占位符。
+- **原版演出还原**：直接运行 PRTS Wiki 的 ScenarioSimulator 引擎，呈现与网页端一致的背景、立绘、对话与配音。引擎代码与字体已内置在安装包内，无需联网预缓存。
+- **电子书式书架**：以游戏内 StoryLine「曲谱 / 乐章」原图作封面，按 主线 / 支线 / 活动 / 联动 / 集成战略 / 生息演算 / 特殊 等分类陈列。长按卡片可进入多选批量下载，缓存与已读状态用圆点标识。
+- **真离线播放**：预下载后断网也能完整播放，运行时资源一律走本地。在线浏览时缺失的资源会自动拉取并缓存。
+- **按范围预下载**：可按单个剧情 / 章节 / 分类批量下载，通过引擎自身的资源清单精确获取所需文件。
+- **内容寻址去重**：跨章节复用的立绘、音乐等相同资源只下载与存储一份，节省空间。
+- **更新检测**：首页显示当前版本号，检测到新版本时高亮闪烁「检测到更新」，点击直接跳转到发布页下载。
+- **博士昵称**：替换剧情文本中的 `{@nickname}` 占位符为自定义昵称。
 
 ---
 
-## 📦 安装与使用（普通用户）
-
-### 1. 下载安装包
+## 📦 下载与安装
 
 前往 [**Releases**](https://github.com/djkcyl/arkstage/releases) 下载对应平台的安装包：
 
-| 平台 | 文件 |
-|------|------|
-| Windows | `.msi` 或 `*-setup.exe` |
-| macOS | `.dmg`（区分 Apple Silicon / Intel） |
-| Linux | `.AppImage` / `.deb` / `.rpm` |
-
-> 想要尝鲜可在 [Actions](https://github.com/djkcyl/arkstage/actions) 的 CI 运行记录里下载每次提交自动构建的「CI 版」产物。
-
-### 2. 首次使用
-
-1. 打开应用 → **设置**：
-   - 点击 **「预缓存引擎」** 下载播放器所需的引擎代码与样式（需联网，仅需一次）。
-   - 点击 **「预缓存目录」** 下载剧情列表。
-2. 回到首页 → **浏览剧情**，挑选想看的剧情。
-3. 想离线观看时，先在不限量网络下预下载资源：
-   - 在播放器里点 **「预下载本剧情资源」**，或
-   - 在浏览页对某个**章节 / 分类**点 **「⬇ 预下载」** 批量获取。
-4. 之后即可在 **设置 → 联网：关** 的离线状态下流畅播放已缓存的剧情。
-
-### 3. 联网策略
-
-- **联网：开**（默认）——缺失资源会自动从 PRTS 拉取并缓存，适合 PC / 常驻不限量网络。
-- **联网：关**——只播放已缓存资源；遇到未缓存内容会提示你开启联网或先行预下载。
+| 平台 | 文件 | 说明 |
+|------|------|------|
+| Android | `*-android-arm64-v8a.apk` | 64 位机型，侧载安装（需在系统里允许安装未知来源应用） |
+| Windows | `*-setup.exe` | 中文安装向导 |
+| macOS | `.dmg` | 区分 Apple Silicon 与 Intel |
+| Linux | `.deb` / `.rpm` | 按发行版选择 |
 
 ---
 
-## 🧩 工作原理（简述）
+## 🚀 使用说明
 
-```
-prts.wiki ──HTTP──▶ Rust 后端 ──invoke──▶ React 前端 ──注入 iframe──▶ 原版引擎运行
-                       │                                                  │
-                  本地缓存 (APPDATA)                 运行时 CDN 资源经 prts-cdn:// 协议「先本地后网络」
-```
+首次启动需要联网一次，从 PRTS 拉取剧情目录（之后以缓存优先、后台静默刷新）。播放引擎与字体已内置在安装包内，打开即用，无需任何预缓存步骤。
 
-- **Rust 后端**抓取并解析剧情目录与剧本，管理缓存，并提供自定义 `prts-cdn://` 协议：命中本地的内容寻址仓库（`$APPDATA/media/{host}/{path}`）即离线返回，未命中时（且允许联网）带正确 Referer 拉取并落盘。
-- **前端**在隔离的 `<iframe>` realm 中启动原版引擎（每个剧情独立 realm，避免引擎顶层 `const` 冲突），并复用引擎自身的 `fun_sys_preload()` 精确枚举某剧情所需资源用于预下载。
+**在线观看**
 
-更详细的设计见 [`docs/superpowers/specs`](docs/superpowers/specs) 与 [`docs/superpowers/plans`](docs/superpowers/plans)。
+1. 首页点 **「浏览剧情」** 进入书架。
+2. 选择分类与章节，点开任意剧情即可在线播放。播放过程中用到的资源会自动缓存，供之后离线复看。
 
----
+**离线下载**
 
-## 🛠️ 开发与构建（开发者）
+想在断网或计费网络下观看，先在不限量网络下预下载资源：
 
-### 环境要求
+- 在播放器内点 **「预下载本剧情资源」** 下载当前这部；
+- 或在书架里 **长按** 封面卡片 / 章节进入多选，勾选后用底栏的 **「⬇ 下载」** 批量获取。
 
-- **Node.js** ≥ 18（推荐 20+）
-- **Rust** 稳定版工具链（通过 [rustup](https://rustup.rs) 安装）
-- 各平台的 Tauri 2 系统依赖（见下）
+下载完成后即可断网流畅播放已缓存的剧情。
 
-### 平台系统依赖
+**下载机制说明**
 
-**Linux（Debian / Ubuntu）**
-
-```bash
-sudo apt-get update
-sudo apt-get install -y \
-  libwebkit2gtk-4.1-dev build-essential curl wget file \
-  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-```
-
-**Windows**：安装 [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) 与 WebView2 运行时（Win10/11 一般已自带）。
-
-**macOS**：安装 Xcode Command Line Tools（`xcode-select --install`）。
-
-> 其他发行版与详细说明参见 [Tauri 官方先决条件](https://v2.tauri.app/start/prerequisites/)。
-
-### 常用命令
-
-```bash
-npm install            # 安装前端依赖
-
-# —— 全应用（前端 + Rust 后端一起）——
-npm run tauri:dev      # 启动桌面应用（前端热重载 + Rust 后端）
-npm run tauri:build    # 构建当前平台安装包到 src-tauri/target/release/bundle/
-                       # （内部会先 npm run build 打包前端，再编译 Rust 并打包）
-
-# —— 仅前端 ——
-npm run dev            # 仅启动前端（Vite，浏览器调试用；引擎相关功能需在 Tauri 内运行）
-npm run build          # 仅构建前端（tsc + vite）
-npm run lint           # ESLint
-
-# —— 仅后端（Rust / Tauri）——
-cargo test  --manifest-path src-tauri/Cargo.toml   # 后端单元测试
-cargo build --manifest-path src-tauri/Cargo.toml   # 仅编译后端（debug）
-```
-
-> 说明：`npm run tauri:build` 是**完整构建**——它会先打包前端（`npm run build`），再编译 Rust 后端并生成安装包，无需单独构建后端。上面的 `cargo` 命令仅用于单独测试 / 编译后端。
-
-> 📱 **Android**：见 [`docs/android-build.md`](docs/android-build.md)——`scripts/build-android.sh` 产出可侧载的 debug APK（应用私有外部存储 `getExternalFilesDir`，无资源目录选择器，其余功能与桌面对等）。
-
-### 如何验证构建是否正确
-
-按从快到慢、从本地到云端的顺序：
-
-1. **静态检查（最快，离线）**：`scripts/test-static.sh` —— 等价于 CI 的 `check` 任务（cargo test + cargo build + tsc + vite build）。
-2. **本地完整打包**：`npm run tauri:build` —— 复现 CI `build` 任务，在 `src-tauri/target/release/bundle/` 下生成**当前操作系统**的安装包。
-
-   只想快速验证某一种格式，可指定打包器（注意：`--` 不能省，否则 npm 会把参数吞掉；且只能构建当前系统支持的格式）：
-
-   ```bash
-   # Linux（本机）：deb / rpm / appimage
-   npm run tauri:build -- --bundles deb
-
-   # Windows 上：msi / nsis        macOS 上：dmg / app
-   # npm run tauri:build -- --bundles msi
-   ```
-
-   > ⚠️ `--bundles` 按**宿主系统**校验，所以本地 `tauri build` 默认只出当前系统的格式（Linux=deb/rpm/appimage，Windows=msi/nsis，macOS=dmg/app）。跨平台安装包一般交给 Release 工作流在各自 runner 上产出；如需在 Linux 上交叉出 Windows 包，见下。
-3. **本地跑 Actions（可选）**：用 [`act`](https://github.com/nektos/act) 在本地执行工作流，例如 `act push -j check`。
-4. **云端真跑**：推送到分支会触发 `check`；在 GitHub **Actions → CI → Run workflow** 可手动构建任意分支的安装包；验证发布流程可推一个测试标签：
-
-   ```bash
-   git tag v0.0.1-test && git push origin v0.0.1-test   # 含连字符 → pre-release，可随后删除
-   ```
-
-### 在 Linux 上交叉构建 Windows 包（实验性）
-
-可以在 Linux 上直接产出 Windows 的 **NSIS 安装包（`*-setup.exe`）**，已实测可用：
-
-```bash
-scripts/build-windows.sh
-# 等价于：
-#   sudo apt-get install -y mingw-w64 nsis
-#   rustup target add x86_64-pc-windows-gnu
-#   npm run tauri:build -- --target x86_64-pc-windows-gnu   # 注意：不要带 --bundles
-```
-
-脚本会把成品安装包 `Arkstage_<版本>_x64-setup.exe` 放到 **`build/artifacts/`**，并在构建后清除庞大的交叉编译中间产物（想保留以加速重复构建可设 `KEEP_TARGET=1`）。整个 `build/` 已在 `.gitignore` 中忽略。
-
-要点与限制：
-
-- **不要带 `--bundles`**：该参数按宿主系统校验会报错；省略后 Tauri 依据 `tauri.conf.json` 的 `bundle.targets` 并按**目标平台**选打包器。
-- **MSI 无法在 Linux 构建**（需 Windows 的 WiX），Tauri 会打印 `ignoring msi` 并跳过，只产出 NSIS。
-- 该二进制是 **GNU ABI**（非 GitHub `windows-latest` 的 MSVC ABI）；能在 Windows 运行，但要最「官方」的产物仍建议用 Release 工作流，或改用 [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin) 走 `--target x86_64-pc-windows-msvc`。
-- Tauri 将交叉编译标记为**实验性**，安装包**未签名**；首次构建会从 GitHub 下载 `nsis_tauri_utils.dll`（需联网）。
-
-> 想本地出 `.msi` 或 macOS 的 `.dmg`，仍需对应系统（或在 Linux 上跑 Windows/macOS 虚拟机）。`act` 只能在本地跑 Actions 的 **Linux** 任务，无法替代 Windows/macOS runner——最省事的跨平台出包方式仍是已配置好的 GitHub Actions。
-
-### 项目结构
-
-```
-arkstage/
-├─ frontend/                 # React 前端（index.html / vite·ts·eslint 配置）
-│  └─ src/
-│     ├─ pages/              # 首页 / 浏览 / 播放器 / 设置
-│     ├─ lib/                # engineBoot(引擎启动) · predownload(清单+预下载) · proxy(CDN 改写)
-│     └─ hooks/
-├─ src-tauri/                # Tauri / Rust 后端
-│  └─ src/
-│     ├─ commands/           # wiki(抓取) · cache(缓存) · assets(下载)
-│     ├─ parser/             # 剧情目录 / 剧情页解析
-│     ├─ media.rs            # 内容寻址媒体仓库
-│     ├─ net_state.rs        # 联网开关
-│     └─ lib.rs              # prts-cdn:// 协议 + 命令注册
-├─ scripts/                  # 构建 / 测试 / 清理脚本（见下）
-├─ docs/                     # 设计文档、构建指南、reference/（gitignore）
-├─ build/                    # 构建产物：dist/（前端 bundle）+ artifacts/（安装包/APK）
-└─ .github/workflows/        # CI 与 Release 工作流
-```
-
-### 测试
-
-```bash
-scripts/test-static.sh   # 离线：cargo test + cargo build + tsc + vite build
-scripts/test-e2e.sh      # 无头端到端冒烟：Xvfb 启动真实应用，xdotool 驱动并断言副作用
-scripts/run-tests.sh     # 以上全部
-```
-
-`test-e2e.sh` 需要 `Xvfb`、`xdotool`、ImageMagick，且需联网（prts.wiki）；它会临时清空本地缓存以保证结果确定。详见 [`scripts/README.md`](scripts/README.md)。
-
-> ⚠️ 已知限制：Linux 的 WebKitGTK 可能缺少 mp3/ogg 编解码器导致**音频不出声**，画面正常；Windows / macOS 自带编解码器无此问题。
-
-### CI / Release
-
-- **CI**（`.github/workflows/ci.yml`）：每次 push / PR 运行静态检查；push 时额外为三大平台构建安装包并作为 Workflow 产物上传（即「CI 版」）。
-- **Release**（`.github/workflows/release.yml`）：推送 `v*` 版本标签时，为 Windows / macOS(Intel + Apple Silicon) / Linux 构建并将安装包发布到对应 GitHub Release 的 Assets。标签含连字符（如 `v1.0.0-beta.1`）会发布为 **pre-release**。
-
-发布示例：
-
-```bash
-# 正式版
-git tag v1.0.0 && git push origin v1.0.0
-# 预发布版
-git tag v1.0.0-beta.1 && git push origin v1.0.0-beta.1
-```
+应用通过引擎自身的资源清单精确知道每部剧情需要哪些文件，按内容寻址存放到本地；跨剧情复用的素材只存一份。下载受设置里的全局并发数与限速约束，可后台进行、断点续传。
 
 ---
 
-## 📄 数据来源与免责声明
+## ⚙️ 设置详解
 
-- 剧情文本与素材来自 [PRTS Wiki](https://prts.wiki)，最终版权归 **《明日方舟》/ 鹰角网络（Hypergryph）** 所有。
-- 本项目为非官方的同人 / 学习性质阅读器，请合理使用、避免对源站造成压力，勿用于任何商业用途。
+- **博士昵称**：填入后会替换剧情文本中的 `{@nickname}` 占位符。
+- **下载设置（并发与限速）**：
+  - **并发数**：同时下载的文件数，数值越大越快、对源站压力越大，默认 4。
+  - **限速（KB/s）**：全局下载速度上限，填 `0` 表示不限速。
+- **播放器返回按钮**：控制播放器左上角是否显示返回按钮。隐藏后仍可用系统返回手势 / 按键退出播放器。
+- **调试控制台**：开启后在应用内显示一个日志控制台，用于排查问题，一般用户保持关闭即可。
+- **资源目录**（桌面端）：剧情图片 / 音频、引擎文件与缓存的存放位置，可改到容量更大的磁盘。Android 端固定在应用私有外部目录，不显示此项。
+- **缓存管理**：
+  - 显示已缓存剧情数量与占用总大小；
+  - **缓存全部剧情**：一次性下载所有剧情资源（占用较大，慎用）；
+  - **清除所有缓存**：删除已下载的剧情媒体与剧情索引。内置的引擎与字体不受影响，也不会被清除。
+- **关于**：查看版本号、免责声明、开源许可、上游软件声明，以及项目主页与 PRTS Wiki 链接。
+- **环境信息**：汇总运行环境（系统、WebView 版本等），反馈问题时一并提供有助于定位。
 
-## 📜 许可证
+---
 
-本仓库尚未指定开源许可证。在补充 `LICENSE` 之前，默认保留所有权利。
+## ❓ 常见问题
+
+**首次打开必须联网吗？**
+需要联网一次以获取剧情目录。之后目录会被缓存，断网也能浏览；只有观看未下载过的剧情才需要再次联网。
+
+**安装包为什么有十几 MB？**
+播放引擎（jQuery / PreloadJS 等）与中文字体都内置在安装包内，这样下载剧情后无需任何额外联网即可离线播放。
+
+**某部剧情的立绘 / 图片缺失或显示异常？**
+演出资源来自上游 PRTS Wiki，个别素材的缺失或错位通常是上游数据的问题，应用本身只是如实呈现。
+
+**怎么更新到新版本？**
+首页底部显示当前版本号。检测到新版本时版本号会变红并闪烁「检测到更新」，点击即跳转到 GitHub 发布页，下载对应平台安装包覆盖安装即可。
+
+**Android 上为什么是横屏 / 侧滑返回？**
+仅播放器锁定横屏并隐藏系统栏以获得沉浸式演出体验，其余页面保持竖屏并显示系统栏。各级页面逐级返回，根页面再返回才退出应用。
+
+**清除缓存会把引擎也删掉吗？**
+不会。「清除所有缓存」只删除剧情媒体与剧情索引，内置的引擎与字体始终保留。
+
+---
+
+## 💬 反馈与建议
+
+遇到问题或有功能建议，欢迎在 GitHub 提交 Issue：
+
+**https://github.com/djkcyl/arkstage/issues**
+
+提交时附上 **设置 → 环境信息** 里的内容、复现步骤与截图，能帮助更快定位问题。
+
+---
+
+## 📜 开源与许可
+
+本应用使用并致谢以下上游：ScenarioSimulator 演出引擎（PRTS Wiki）、jQuery、PreloadJS / CreateJS、Tauri、React、React Router、Noto Sans CJK 字体。各组件许可证全文见应用内 **设置 → 关于 → 开源许可**。
+
+项目源码托管于 GitHub：**https://github.com/djkcyl/arkstage** 。仓库当前尚未指定开源许可证，在补充 `LICENSE` 之前默认保留所有权利。
+
+---
+
+## 🛠 参与开发
+
+构建、调试、项目结构、CI / 发版等开发者文档见 [`docs/DEVELOPMENT.md`](https://github.com/djkcyl/arkstage/blob/master/docs/DEVELOPMENT.md)。

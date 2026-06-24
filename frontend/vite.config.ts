@@ -7,7 +7,8 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   // 对齐 Tauri 的 devUrl（src-tauri/tauri.conf.json），使 `tauri dev` 能连上。
-  server: { port: 5174, strictPort: true },
+  // fs.allow 放开上级目录：使用说明页 import 仓库根的 README.md?raw，把它内置进包。
+  server: { port: 5174, strictPort: true, fs: { allow: [".."] } },
   build: {
     // 相对 Vite root（frontend/）解析 → 仓库根的 build/dist。
     outDir: '../build/dist',

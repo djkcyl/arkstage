@@ -24,11 +24,9 @@ export default function HomePage() {
       <h1 className="home-title">方舟剧场</h1>
       <p className="home-tagline">明日方舟剧情 · 离线演出回放</p>
 
-      <ul className="home-features">
-        <li>在 PRTS 原版引擎中重演剧情——立绘、背景、配音与对话动画一致</li>
-        <li>不限量网络下按章节 / 分类预下载；资源内容寻址去重，跨章节只存一份</li>
-        <li>下载后完全离线播放，播放引擎与字体已内置于软件包</li>
-      </ul>
+      <button className="home-help" onClick={() => navigate("/help")}>
+        使用说明
+      </button>
 
       <div className="home-actions">
         <button className="btn-primary" onClick={() => navigate("/browse")}>

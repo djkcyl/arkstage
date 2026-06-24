@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Arkstage",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "identifier": "cn.aunly.arkstage",
   "build": {
     "frontendDist": "../build/dist",
@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://code.jquery.com asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost; style-src 'self' 'unsafe-inline' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost; img-src 'self' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost data:; media-src 'self' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost; font-src 'self' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost prts-cdn: http://prts-cdn.localhost",
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://code.jquery.com asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost; style-src 'self' 'unsafe-inline' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost; img-src 'self' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost data:; media-src 'self' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost; font-src 'self' asset: http://asset.localhost prts-cdn: http://prts-cdn.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost prts-cdn: http://prts-cdn.localhost https://data.jsdelivr.com https://cdn.jsdelivr.net https://api.github.com",
       "assetProtocol": {
         "enable": true,
         "scope": {
@@ -37,7 +37,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "rpm", "app", "dmg", "msi", "nsis"],
+    "targets": ["deb", "rpm", "app", "dmg", "nsis"],
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese"]
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
