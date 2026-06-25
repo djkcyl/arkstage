@@ -38,7 +38,13 @@ async function latestViaJsd(): Promise<string> {
   // it on every release), so it's a reliable CN-reachable "latest version" source.
   // Caveat: jsd caches mutable refs (~12h), so detection can lag a release slightly;
   // the GitHub fallback is immediate.
+  // `cache: "no-store"` is mandatory: jsd serves package.json with
+  // `cache-control: max-age=604800` (7-day browser cache), so without it the
+  // WebView would keep returning a stale version for up to a week after a
+  // release — the update check would silently lag. no-store always revalidates
+  // against jsd's edge (which has its own ~12h CDN cache, the real freshness floor).
   const r = await fetch(`https://cdn.jsdelivr.net/gh/${REPO}@master/package.json`, {
+    cache: "no-store",
     signal: AbortSignal.timeout(8000),
   });
   if (!r.ok) throw new Error(`jsd HTTP ${r.status}`);
@@ -50,6 +56,7 @@ async function latestViaJsd(): Promise<string> {
 async function latestViaGithub(): Promise<string> {
   const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
     headers: { Accept: "application/vnd.github+json" },
+    cache: "no-store",
     signal: AbortSignal.timeout(8000),
   });
   if (!r.ok) throw new Error(`gh HTTP ${r.status}`);
