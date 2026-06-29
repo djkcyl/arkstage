@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useCallback, useRef } from "react"
 import type { ReactNode } from "react";
 import { runPredownload, isOfflineError } from "./predownload";
 import type { PredownloadStatus, PredownloadSession } from "./predownload";
+import { useCompression } from "./CompressionContext";
 
 /**
  * App-wide predownload state. Lives at the App root so a running download (and its
@@ -44,6 +45,9 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   const [result, setResult] = useState<DownloadResult | null>(null);
   const runningRef = useRef(false);
   const finishedListeners = useRef<Set<() => void>>(new Set());
+  // Block starting downloads while an image-compression batch rewrites the store
+  // (the Rust side enforces this too; this gives an immediate, clear message).
+  const { busy: compressionBusy } = useCompression();
 
   const onFinished = useCallback((cb: () => void) => {
     finishedListeners.current.add(cb);
@@ -54,6 +58,10 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
 
   const start = useCallback(async (titles: string[]) => {
     if (runningRef.current || titles.length === 0) return;
+    if (compressionBusy) {
+      setResult({ message: "正在进行记忆重组（资源压缩），请等待完成后再下载。", failedKeys: [] });
+      return;
+    }
     runningRef.current = true;
     setStatus({
       paused: false,
@@ -95,7 +103,7 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       setStatus(null);
       setSession(null);
     }
-  }, []);
+  }, [compressionBusy]);
 
   return (
     <DownloadContext.Provider

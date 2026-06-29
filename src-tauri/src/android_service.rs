@@ -34,6 +34,9 @@ static DL_TOTAL: AtomicU32 = AtomicU32::new(0);
 static MAN_DONE: AtomicU32 = AtomicU32::new(0);
 static MAN_TOTAL: AtomicU32 = AtomicU32::new(0);
 static MAN_ACTIVE: AtomicBool = AtomicBool::new(false);
+static CMP_ACTIVE: AtomicBool = AtomicBool::new(false);
+static CMP_DONE: AtomicU32 = AtomicU32::new(0);
+static CMP_TOTAL: AtomicU32 = AtomicU32::new(0);
 
 /// Last posted (key, active, when) — for dedup + throttle.
 static LAST: Mutex<Option<(String, bool, Instant)>> = Mutex::new(None);
@@ -61,6 +64,15 @@ pub fn set_reading(reading: bool) {
     render();
 }
 
+/// Compression batch progress — driven from the Rust compress workers so it keeps
+/// advancing (and the FGS stays alive) even when the WebView is frozen.
+pub fn set_compress(active: bool, done: u32, total: u32) {
+    CMP_ACTIVE.store(active, Ordering::Relaxed);
+    CMP_DONE.store(done, Ordering::Relaxed);
+    CMP_TOTAL.store(total, Ordering::Relaxed);
+    render();
+}
+
 // Several fields are read only in the Android `apply`; keep them on desktop too.
 #[allow(dead_code)]
 struct Plan {
@@ -72,8 +84,21 @@ struct Plan {
     key: String,
 }
 
-/// Decide what the notification should show: download > reading > idle (off).
+/// Decide what the notification should show: compress > download > reading > idle.
 fn plan() -> Plan {
+    if CMP_ACTIVE.load(Ordering::Relaxed) {
+        let done = CMP_DONE.load(Ordering::Relaxed);
+        let total = CMP_TOTAL.load(Ordering::Relaxed);
+        let progress = (done as u64 * 100).checked_div(total as u64).unwrap_or(0) as i32;
+        return Plan {
+            active: true,
+            text: format!("正在进行记忆重组…\n{done}/{total}"),
+            progress,
+            max: 100,
+            indeterminate: total == 0,
+            key: format!("cmp|{done}|{total}"),
+        };
+    }
     if DL_ACTIVE.load(Ordering::Relaxed) {
         let done = DL_DONE.load(Ordering::Relaxed);
         let total = DL_TOTAL.load(Ordering::Relaxed);

@@ -38,6 +38,8 @@ sudo apt-get install -y \
 
 > 其他发行版与详细说明参见 [Tauri 官方先决条件](https://v2.tauri.app/start/prerequisites/)。
 
+> 注：资源压缩功能依赖 `webp` crate（封装 `libwebp`，由 `cc` 从源码编译 C 代码）。它随 `cargo build` 自动构建，无需额外系统包；交叉编译到 Android 走与 `ring` 相同的 NDK `cc` 路径（已验证 aarch64 可构建）。图片解码用纯 Rust 的 `image` crate。
+
 ## 常用命令
 
 ```bash

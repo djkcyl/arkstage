@@ -35,6 +35,16 @@ const IDLE_POLL_MS: u64 = 50;
 /// Name of the progress event the frontend listens for.
 pub const PROGRESS_EVENT: &str = "download://progress";
 
+/// True while any job is Running/Paused. Lets the compression feature refuse to
+/// start a batch mid-download (the reverse of `compress::ensure_idle`). Kept in
+/// sync from `download_start` and every progress emit.
+static DOWNLOAD_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Whether a bulk download is currently active (Running or Paused).
+pub fn any_active() -> bool {
+    DOWNLOAD_ACTIVE.load(Ordering::Relaxed)
+}
+
 /// Where progress snapshots go. Abstracting this keeps `Manager`/the worker engine
 /// independent of Tauri's `AppHandle`, so they're testable in a plain async test.
 pub trait ProgressSink: Send + Sync {
@@ -54,6 +64,7 @@ impl ProgressSink for AppHandleSink {
         // A running/paused job keeps the service alive; a terminal one releases it
         // (back to "reading" or idle, decided in android_service).
         let active = matches!(snap.status, Status::Running | Status::Paused);
+        DOWNLOAD_ACTIVE.store(active, Ordering::Relaxed);
         crate::android_service::set_download(active, snap.done, snap.total);
     }
 }
@@ -447,6 +458,9 @@ async fn fetch_to_store(
             return Err("cancelled".into());
         }
     }
+    // Real-time compression: when a tier is enabled and this is an image, store
+    // the compressed (WebP) bytes directly instead of the original.
+    let buf = crate::compress::maybe_transcode_image(key, buf);
     // Store under the canonical key, not the source-specific fetch URL.
     crate::media::write_local(root, key, &buf)
 }
@@ -547,6 +561,10 @@ pub fn download_start(
 ) -> Result<u64, String> {
     // Offline gate: don't even start a bulk download when networking is off.
     crate::net::ensure_online()?;
+    // Compression gate: refuse new downloads while a compression batch runs (the
+    // store is being rewritten in place; downloads resume once it finishes).
+    crate::compress::ensure_idle()?;
+    DOWNLOAD_ACTIVE.store(true, Ordering::Relaxed);
     // Start the keep-alive foreground service NOW, from this (foreground) command —
     // Android 12+ forbids starting an FGS from the background, and the first engine
     // progress emit could land after the user has already backgrounded the app.

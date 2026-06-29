@@ -43,6 +43,13 @@ scraper = "0.22"
 tokio = { version = "1", features = ["full"] }
 urlencoding = "2.1"
 html-escape = "0.2"
+# Client-side image compression (cache "资源压缩" feature). `image` decodes
+# PNG/JPEG and — crucially — already-compressed WebP (needed to re-compress to a
+# more aggressive tier); `webp` wraps libwebp (same libwebp 1.3.x measured in the
+# feasibility study) to encode lossy-with-alpha + lossless. libwebp builds its C
+# via the `cc` crate, the exact cross-compile path `ring` already uses for Android.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+webp = "0.3"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"

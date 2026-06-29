@@ -9,6 +9,7 @@ import HelpPage from "./pages/HelpPage";
 import DebugConsole from "./components/DebugConsole";
 import DownloadBar from "./components/DownloadBar";
 import { DownloadProvider } from "./lib/DownloadContext";
+import { CompressionProvider } from "./lib/CompressionContext";
 import { applyPersistedDownloadSettings } from "./lib/predownload";
 import { startKeepalive } from "./lib/keepalive";
 
@@ -25,6 +26,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <CompressionProvider>
       <DownloadProvider>
         <Routes>
           <Route path="/" element={<HomePage />} />
@@ -38,6 +40,7 @@ export default function App() {
         <DownloadBar />
         <DebugConsole />
       </DownloadProvider>
+      </CompressionProvider>
     </BrowserRouter>
   );
 }

@@ -7,6 +7,8 @@ import { isHidePlayerBack, setHidePlayerBack } from "../lib/uiSettings";
 import { isAndroid } from "../lib/platform";
 import { getDownloadSettings, setDownloadSettings } from "../lib/predownload";
 import { useDownload } from "../lib/DownloadContext";
+import { useCompression } from "../lib/CompressionContext";
+import type { Tier, CompressEstimate } from "../lib/CompressionContext";
 import type { StoryIndex } from "../hooks/useStoryIndex";
 import { collectEnvInfo, copyText } from "../lib/diagnostics";
 
@@ -28,7 +30,11 @@ interface ResourceDirInfo {
 export default function SettingsPage() {
   const navigate = useNavigate();
   const hideResourceDir = isAndroid();
-  const { start: startPredownload } = useDownload();
+  const { start: startPredownload, busy: downloadBusy } = useDownload();
+  const compression = useCompression();
+  const [showCompress, setShowCompress] = useState(false);
+  const [compressEst, setCompressEst] = useState<CompressEstimate | null>(null);
+  const [selectedTier, setSelectedTier] = useState<Tier | null>(null);
   const [nickname, setNickname] = useState("博士");
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
   const [message, setMessage] = useState("");
@@ -173,6 +179,39 @@ export default function SettingsPage() {
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   };
 
+  // Open the compression tier dialog (fetch the size estimate first).
+  const openCompress = async () => {
+    if (downloadBusy) {
+      showMsg("请先完成当前下载，再进行资源压缩。", 4000);
+      return;
+    }
+    setSelectedTier(null);
+    setShowCompress(true);
+    try {
+      setCompressEst(await compression.estimate());
+    } catch (e) {
+      showMsg(`估算失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
+    }
+  };
+
+  const confirmCompress = async () => {
+    if (!selectedTier) return;
+    setShowCompress(false);
+    try {
+      await compression.start(selectedTier);
+      showMsg("已开始记忆重组（资源压缩），进度见底部进度条。");
+    } catch (e) {
+      showMsg(`压缩失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
+    }
+  };
+
+  const TIER_LABELS: Record<Tier, string> = {
+    off: "关闭",
+    lossless: "无损",
+    q90: "高质量",
+    q70: "极致",
+  };
+
   return (
     <div className="settings-page">
       <div className="settings-content">
@@ -293,10 +332,21 @@ export default function SettingsPage() {
       <div className="setting-group">
         <label>缓存管理</label>
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          <button className="btn-primary" onClick={cacheAllStories} disabled={busy}>
+          <button
+            className="btn-primary"
+            onClick={cacheAllStories}
+            disabled={busy || compression.busy}
+          >
             缓存全部剧情
           </button>
-          <button className="btn-danger" onClick={clearAllCache} disabled={busy}>
+          <button
+            className="btn-primary"
+            onClick={openCompress}
+            disabled={busy || compression.busy || downloadBusy}
+          >
+            压缩资源
+          </button>
+          <button className="btn-danger" onClick={clearAllCache} disabled={busy || compression.busy}>
             清除所有缓存
           </button>
         </div>
@@ -309,8 +359,92 @@ export default function SettingsPage() {
           ) : (
             <div>正在读取缓存状态...</div>
           )}
+          {compression.tier !== "off" && (
+            <div style={{ marginTop: "6px", display: "flex", alignItems: "center", gap: "10px" }}>
+              <span>
+                实时压缩: 已开启（{TIER_LABELS[compression.tier as Tier] ?? compression.tier}），新下载的图片会自动压缩
+              </span>
+              {!compression.busy && (
+                <button
+                  className="nav-btn"
+                  style={{ fontSize: "12px" }}
+                  onClick={() => compression.disableRealtime()}
+                >
+                  关闭实时压缩
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Compression tier dialog */}
+      {showCompress && (
+        <div className="dl-result-overlay" onClick={() => setShowCompress(false)}>
+          <div className="dl-result" onClick={(e) => e.stopPropagation()}>
+            <div className="dl-result-msg">压缩缓存图片（记忆重组）</div>
+            <div className="dl-result-sub" style={{ marginBottom: "10px" }}>
+              图片转 WebP 可大幅减小占用。选择一个档位后开始；压缩会替换原图，期间无法下载新资源。
+              {compression.tier !== "off" && "（已是更高档位的文件不会重复压缩；切到更激进档位会二次重压。）"}
+            </div>
+            <div className="cache-info" style={{ marginBottom: "10px" }}>
+              当前缓存: {compressEst ? formatBytes(compressEst.totalBytes) : "估算中…"}
+              {compressEst && `（其中图片 ${formatBytes(compressEst.imageBytes)}）`}
+            </div>
+            {(["lossless", "q90", "q70"] as Tier[]).map((t) => {
+              const est = compressEst
+                ? t === "lossless"
+                  ? compressEst.losslessBytes
+                  : t === "q90"
+                    ? compressEst.q90Bytes
+                    : compressEst.q70Bytes
+                : 0;
+              const desc =
+                t === "lossless"
+                  ? "无损 · 画质完全不变 · 约省 50%"
+                  : t === "q90"
+                    ? "高质量 · 肉眼无损(SSIM≥0.99) · 约省 79%"
+                    : "极致 · 体积最小 · 约省 89%";
+              return (
+                <label
+                  key={t}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    padding: "8px",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    background: selectedTier === t ? "rgba(244,196,48,0.15)" : "transparent",
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="compress-tier"
+                    checked={selectedTier === t}
+                    onChange={() => setSelectedTier(t)}
+                  />
+                  <span style={{ flex: "1 1 auto" }}>
+                    <div style={{ fontWeight: 600 }}>{TIER_LABELS[t]}</div>
+                    <div style={{ fontSize: "12px", opacity: 0.8 }}>{desc}</div>
+                  </span>
+                  <span style={{ flex: "0 0 auto", textAlign: "right" }}>
+                    {compressEst ? `≈ ${formatBytes(est)}` : "—"}
+                  </span>
+                </label>
+              );
+            })}
+            <div className="dl-result-actions" style={{ marginTop: "10px" }}>
+              <button className="btn-primary" onClick={confirmCompress} disabled={!selectedTier}>
+                开始压缩
+              </button>
+              <button className="nav-btn" onClick={() => setShowCompress(false)}>
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* About */}
       <div className="setting-group">
