@@ -111,8 +111,8 @@ export function CompressionProvider({ children }: { children: ReactNode }) {
           setResult({
             message:
               snap.status === "cancelled"
-                ? `记忆重组已取消（已释放 ${freed}）`
-                : `记忆重组完成：处理 ${snap.done}/${snap.total}，释放约 ${freed}`,
+                ? `压缩已取消（已释放 ${freed}）`
+                : `压缩完成：处理 ${snap.done}/${snap.total}，释放约 ${freed}`,
           });
         } else {
           lastRef.current = snap;
@@ -133,7 +133,7 @@ export function CompressionProvider({ children }: { children: ReactNode }) {
     setTier(t);
     if (isTerminal(snap)) {
       // Nothing needed compression — surface an immediate summary.
-      setResult({ message: `记忆重组完成：无需处理的资源（已是 ${t} 档）` });
+      setResult({ message: `压缩完成：无需处理的资源（已是 ${t} 档）` });
     } else {
       lastRef.current = snap;
       setStatus(snap);

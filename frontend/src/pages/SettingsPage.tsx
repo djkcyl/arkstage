@@ -199,7 +199,7 @@ export default function SettingsPage() {
     setShowCompress(false);
     try {
       await compression.start(selectedTier);
-      showMsg("已开始记忆重组（资源压缩），进度见底部进度条。");
+      showMsg("已开始压缩资源，进度见底部进度条。");
     } catch (e) {
       showMsg(`压缩失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
     }
@@ -382,7 +382,7 @@ export default function SettingsPage() {
       {showCompress && (
         <div className="dl-result-overlay" onClick={() => setShowCompress(false)}>
           <div className="dl-result" onClick={(e) => e.stopPropagation()}>
-            <div className="dl-result-msg">压缩缓存图片（记忆重组）</div>
+            <div className="dl-result-msg">压缩缓存图片</div>
             <div className="dl-result-sub" style={{ marginBottom: "10px" }}>
               图片转 WebP 可大幅减小占用。选择一个档位后开始；压缩会替换原图，期间无法下载新资源。
               {compression.tier !== "off" && "（已是更高档位的文件不会重复压缩；切到更激进档位会二次重压。）"}

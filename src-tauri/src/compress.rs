@@ -743,4 +743,71 @@ mod tests {
         assert!(!dir.join("Avg_x.webp.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    fn write_png(path: &Path, seed: u8) {
+        let mut rgba = image::RgbaImage::new(128, 128);
+        for (x, y, p) in rgba.enumerate_pixels_mut() {
+            *p = image::Rgba([x as u8, y as u8, seed, ((x + y) % 256) as u8]);
+        }
+        let mut png: Vec<u8> = Vec::new();
+        image::DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, &png).unwrap();
+    }
+
+    /// The resume guarantee: `collect_pending` skips files already at/beyond the
+    /// target tier (recorded in the index), so a batch re-launched after an app
+    /// interruption only does the remaining work — and re-scanning after they're
+    /// all recorded yields nothing. Uses unique rel keys so the shared global
+    /// index can't contaminate the assertions.
+    #[test]
+    fn collect_pending_skips_done_and_resumes() {
+        let tag = format!("res{}", std::process::id());
+        let media = std::env::temp_dir().join(format!("prts_resume_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&media);
+        // 3 real PNG images + 1 non-image (must be ignored).
+        let imgs: Vec<String> = (0..3).map(|i| format!("{tag}/h/img{i}.png")).collect();
+        for (i, rel) in imgs.iter().enumerate() {
+            write_png(&media.join(rel), i as u8 * 40);
+        }
+        std::fs::write(media.join(format!("{tag}/note.txt")), b"not an image").unwrap();
+
+        // Simulate "img0 already compressed to Q90 before the interruption".
+        index().lock().unwrap().set(&imgs[0], Tier::Q90);
+
+        // A resumed batch toward Q90 must enqueue only img1 + img2 (img0 skipped,
+        // note.txt ignored).
+        let pending = collect_pending(&media, Tier::Q90);
+        let rels: std::collections::HashSet<String> = pending.iter().map(|(_, r)| r.clone()).collect();
+        assert_eq!(pending.len(), 2, "should resume with 2 remaining, got {rels:?}");
+        assert!(!rels.contains(&imgs[0]));
+        assert!(rels.contains(&imgs[1]) && rels.contains(&imgs[2]));
+
+        // Process the remaining (as the worker would) and record them.
+        for (path, rel) in &pending {
+            assert!(compress_one(path, Tier::Q90).is_ok());
+            index().lock().unwrap().set(rel, Tier::Q90);
+        }
+        // Re-scan: nothing left → the batch is complete (idempotent resume).
+        assert_eq!(collect_pending(&media, Tier::Q90).len(), 0);
+
+        // Re-tier to the more aggressive Q70 re-enqueues all three (rank q90 < q70).
+        assert_eq!(collect_pending(&media, Tier::Q70).len(), 3);
+        // …but a weaker target (back to Lossless) enqueues none (can't un-compress).
+        assert_eq!(collect_pending(&media, Tier::Lossless).len(), 0);
+
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[test]
+    fn ensure_idle_reflects_active_flag() {
+        ACTIVE.store(true, Ordering::Relaxed);
+        assert!(ensure_idle().is_err());
+        ACTIVE.store(false, Ordering::Relaxed);
+        assert!(ensure_idle().is_ok());
+    }
 }

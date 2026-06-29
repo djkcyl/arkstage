@@ -101,7 +101,7 @@ function CompressBar() {
   const pct = status.total > 0 ? (status.done / status.total) * 100 : 0;
   const prefix = status.status === "paused" ? "已暂停·" : "";
   const freed = `${(status.freedBytes / 1024 / 1024).toFixed(1)} MB`;
-  const label = `${prefix}记忆重组 ${status.done}/${status.total}`;
+  const label = `${prefix}压缩中 ${status.done}/${status.total}`;
   return (
     <div
       style={{
@@ -151,11 +151,14 @@ export default function DownloadBar() {
 
   if (pathname.startsWith("/play/")) return null;
   // Compression batch takes priority (downloads are gated off while it runs).
+  // Keep the download <ResultPanel/> mounted too, so a "downloads blocked while
+  // compressing" warning shows IMMEDIATELY rather than only after the batch ends.
   if (compression.status) {
     return (
       <>
         <CompressBar />
         <CompressResultPanel />
+        <ResultPanel />
       </>
     );
   }
