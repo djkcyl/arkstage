@@ -6,34 +6,25 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { proxyUrl } from "./proxy";
+import {
+  DEFAULT_FALLBACK_CATEGORY,
+  RESOURCE_ROOTS,
+  fetchRemoteBookshelfMetadata,
+  parseBookshelfMetadata,
+  type BookshelfMetadata,
+  type RemoteArt,
+  type ResourceSource,
+  type ScenarioLinkOverride,
+} from "./bookshelfMetadata";
 
-const RESOURCE_ROOT = "https://cdn.jsdelivr.net/gh/djkcyl/arkstage@resources";
-const METADATA_URL = `${RESOURCE_ROOT}/metadata.json`;
+export { RESOURCE_ROOTS, fetchRemoteBookshelfMetadata, parseBookshelfMetadata };
+export type { BookshelfMetadata, RemoteArt, ScenarioLinkOverride };
 const CACHE_KEY = "bookshelf-metadata";
-
-export interface RemoteArt {
-  path: string;
-  width: number;
-  height: number;
-}
-
-export interface ScenarioLinkOverride {
-  pos: { x: number; y: number };
-  size: { x: number; y: number };
-}
-
-export interface BookshelfMetadata {
-  schemaVersion: 1;
-  version: string;
-  storylines: [string, string[]][];
-  covers: Record<string, RemoteArt>;
-  banners: Record<string, RemoteArt>;
-  scenarioLinks: Record<string, ScenarioLinkOverride>;
-}
 
 interface ContextValue {
   metadata: BookshelfMetadata | null;
@@ -42,92 +33,11 @@ interface ContextValue {
 
 export interface ResolvedArt extends RemoteArt {
   url: string;
+  fallbackUrl: string;
 }
 
 const Context = createContext<ContextValue | null>(null);
 let currentMetadata: BookshelfMetadata | null = null;
-
-function isNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function parseArtMap(value: unknown, kind: "covers" | "banners"): Record<string, RemoteArt> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const result: Record<string, RemoteArt> = {};
-  const pathPattern = new RegExp(`^${kind}/[0-9a-f]{20}\\.webp$`);
-  for (const [key, raw] of Object.entries(value)) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-    const art = raw as Record<string, unknown>;
-    if (
-      typeof art.path !== "string" ||
-      !pathPattern.test(art.path) ||
-      !isNumber(art.width) ||
-      !isNumber(art.height) ||
-      art.width <= 0 ||
-      art.height <= 0 ||
-      art.width > 8192 ||
-      art.height > 8192
-    ) {
-      return null;
-    }
-    result[key] = { path: art.path, width: art.width, height: art.height };
-  }
-  return result;
-}
-
-/** Validate untrusted runtime metadata before it can affect paths or layout. */
-export function parseBookshelfMetadata(value: unknown): BookshelfMetadata | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
-  if (raw.schemaVersion !== 1 || typeof raw.version !== "string" || !/^[0-9a-f]{20}$/.test(raw.version)) {
-    return null;
-  }
-  if (!Array.isArray(raw.storylines)) return null;
-  const storylines: [string, string[]][] = [];
-  for (const entry of raw.storylines) {
-    if (
-      !Array.isArray(entry) ||
-      entry.length !== 2 ||
-      typeof entry[0] !== "string" ||
-      !Array.isArray(entry[1]) ||
-      !entry[1].every((name) => typeof name === "string")
-    ) {
-      return null;
-    }
-    storylines.push([entry[0], [...entry[1]]]);
-  }
-  const covers = parseArtMap(raw.covers, "covers");
-  const banners = parseArtMap(raw.banners, "banners");
-  if (!covers || !banners) return null;
-
-  const scenarioLinks: Record<string, ScenarioLinkOverride> = {};
-  if (!raw.scenarioLinks || typeof raw.scenarioLinks !== "object" || Array.isArray(raw.scenarioLinks)) {
-    return null;
-  }
-  for (const [key, value] of Object.entries(raw.scenarioLinks)) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const link = value as Record<string, unknown>;
-    const pos = link.pos as Record<string, unknown> | undefined;
-    const size = link.size as Record<string, unknown> | undefined;
-    if (
-      !pos ||
-      !size ||
-      !isNumber(pos.x) ||
-      !isNumber(pos.y) ||
-      !isNumber(size.x) ||
-      !isNumber(size.y) ||
-      size.x <= 0 ||
-      size.y <= 0
-    ) {
-      return null;
-    }
-    scenarioLinks[key.toLowerCase()] = {
-      pos: { x: pos.x, y: pos.y },
-      size: { x: size.x, y: size.y },
-    };
-  }
-  return { schemaVersion: 1, version: raw.version, storylines, covers, banners, scenarioLinks };
-}
 
 async function loadCached(): Promise<BookshelfMetadata | null> {
   try {
@@ -138,36 +48,62 @@ async function loadCached(): Promise<BookshelfMetadata | null> {
   }
 }
 
-async function refreshRemote(): Promise<BookshelfMetadata | null> {
-  const response = await fetch(METADATA_URL, { cache: "no-store" });
-  if (!response.ok) throw new Error(`bookshelf metadata HTTP ${response.status}`);
-  const parsed = parseBookshelfMetadata(await response.json());
-  if (!parsed) throw new Error("invalid bookshelf metadata");
-  await invoke("save_to_cache", { key: CACHE_KEY, data: JSON.stringify(parsed) });
-  return parsed;
-}
-
 export function BookshelfMetadataProvider({ children }: { children: ReactNode }) {
   const [metadata, setMetadata] = useState<BookshelfMetadata | null>(null);
+  const [source, setSource] = useState<ResourceSource>("jsdelivr");
+  const [warning, setWarning] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const metadataRef = useRef<BookshelfMetadata | null>(null);
+  const generation = useRef(0);
+
+  const applyMetadata = useCallback((next: BookshelfMetadata) => {
+    metadataRef.current = next;
+    currentMetadata = next;
+    setMetadata(next);
+  }, []);
+
+  const refresh = useCallback(async () => {
+    const request = ++generation.current;
+    setRefreshing(true);
+    try {
+      const fresh = await fetchRemoteBookshelfMetadata();
+      if (request !== generation.current) return;
+      applyMetadata(fresh.metadata);
+      setSource(fresh.source);
+      setWarning(null);
+      try {
+        await invoke("save_to_cache", { key: CACHE_KEY, data: JSON.stringify(fresh.metadata) });
+      } catch {
+        if (request === generation.current) {
+          setWarning("书架信息已更新，但无法写入本地缓存；下次离线启动可能无法使用最新分类和封面。");
+        }
+      }
+    } catch {
+      if (request === generation.current) {
+        setWarning(
+          metadataRef.current
+            ? "书架在线更新失败，已保留并使用上次成功缓存。请检查网络后重试。"
+            : `无法获取书架信息；当前剧情会暂时归入“${DEFAULT_FALLBACK_CATEGORY}”并使用占位封面。请检查网络后重试。`
+        );
+      }
+    } finally {
+      if (request === generation.current) setRefreshing(false);
+    }
+  }, [applyMetadata]);
 
   useEffect(() => {
     let alive = true;
-    void loadCached().then((cached) => {
-      if (alive && cached) setMetadata(cached);
-    });
-    void refreshRemote()
-      .then((fresh) => {
-        if (alive && fresh) setMetadata(fresh);
-      })
-      .catch(() => {});
+    void (async () => {
+      const cached = await loadCached();
+      if (!alive) return;
+      if (cached) applyMetadata(cached);
+      await refresh();
+    })();
     return () => {
       alive = false;
+      generation.current += 1;
     };
-  }, []);
-
-  useEffect(() => {
-    currentMetadata = metadata;
-  }, [metadata]);
+  }, [applyMetadata, refresh]);
 
   const resolveArt = useCallback(
     async (kind: "covers" | "banners", key: string): Promise<ResolvedArt | null> => {
@@ -175,18 +111,36 @@ export function BookshelfMetadataProvider({ children }: { children: ReactNode })
       const art = metadata[kind][sanitizeCoverKey(key)];
       if (!art) return null;
       // Route through the cache-through protocol. It serves a content-addressed
-      // local copy when available and fetches from jsDelivr only on a cache miss.
+      // local copy when available and fetches from the preferred remote on a cache miss.
       // Unlike asset:// this also works when the user selects a custom data root.
+      const primaryRoot = RESOURCE_ROOTS[source];
+      const fallbackRoot = source === "jsdelivr" ? RESOURCE_ROOTS.github : RESOURCE_ROOTS.jsdelivr;
       return {
         ...art,
-        url: proxyUrl(`${RESOURCE_ROOT}/${art.path}?v=${metadata.version}`),
+        url: proxyUrl(`${primaryRoot}/${art.path}?v=${metadata.version}`),
+        fallbackUrl: proxyUrl(`${fallbackRoot}/${art.path}?v=${metadata.version}`),
       };
     },
-    [metadata]
+    [metadata, source]
   );
 
   const value = useMemo(() => ({ metadata, resolveArt }), [metadata, resolveArt]);
-  return <Context.Provider value={value}>{children}</Context.Provider>;
+  return (
+    <Context.Provider value={value}>
+      {children}
+      {warning && (
+        <div className="bookshelf-sync-warning" role="alert">
+          <span>{warning}</span>
+          <button type="button" onClick={() => void refresh()} disabled={refreshing}>
+            {refreshing ? "重试中…" : "重试"}
+          </button>
+          <button type="button" className="bookshelf-sync-dismiss" onClick={() => setWarning(null)} aria-label="关闭提示">
+            ×
+          </button>
+        </div>
+      )}
+    </Context.Provider>
+  );
 }
 
 export function useBookshelfMetadata(): ContextValue {

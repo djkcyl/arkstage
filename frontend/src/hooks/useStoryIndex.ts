@@ -33,7 +33,11 @@ export function useStoryIndex() {
   const [error, setError] = useState<string | null>(null);
   const { metadata } = useBookshelfMetadata();
   const index = useMemo(
-    () => (rawIndex ? regroupStoryIndex(rawIndex, metadata?.storylines ?? []) : null),
+    () => (
+      rawIndex
+        ? regroupStoryIndex(rawIndex, metadata?.storylines ?? [], metadata?.fallbackCategory)
+        : null
+    ),
     [rawIndex, metadata]
   );
 

@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import type { Book } from "../lib/bookshelf";
 import { cachedKey } from "../lib/bookshelf";
 import { coverFallback } from "../lib/cover";
-import { useBookshelfMetadata } from "../lib/BookshelfMetadataContext";
+import { useBookshelfMetadata, type ResolvedArt } from "../lib/BookshelfMetadataContext";
 import { useLongPress } from "../lib/useLongPress";
 import type { StoryChapter } from "../hooks/useStoryIndex";
 
@@ -45,11 +45,11 @@ export default function ChapterDetail({
 }: Props) {
   const fallback = coverFallback();
   const { metadata, resolveArt } = useBookshelfMetadata();
-  const [banner, setBanner] = useState<string | null>(null);
+  const [banner, setBanner] = useState<ResolvedArt | null>(null);
   useEffect(() => {
     let alive = true;
     void resolveArt("banners", book.coverKey).then((art) => {
-      if (alive) setBanner(art?.url ?? null);
+      if (alive) setBanner(art);
     });
     return () => {
       alive = false;
@@ -78,7 +78,24 @@ export default function ChapterDetail({
   return (
     <div className="chapter-detail">
       <div className={`detail-hero ${banner ? "has-banner" : ""}`} style={{ background: fallback.background }}>
-        {banner && <img className="hero-banner" src={banner} alt="" draggable={false} />}
+        {banner && (
+          <img
+            className="hero-banner"
+            src={banner.url}
+            data-fallback={banner.fallbackUrl}
+            onError={(event) => {
+              const fallbackUrl = event.currentTarget.dataset.fallback;
+              if (!fallbackUrl) {
+                setBanner(null);
+                return;
+              }
+              delete event.currentTarget.dataset.fallback;
+              event.currentTarget.src = fallbackUrl;
+            }}
+            alt=""
+            draggable={false}
+          />
+        )}
         <div className="hero-scrim" />
         <button className="hero-back back-icon" onClick={onBack} aria-label="返回">
           ◀

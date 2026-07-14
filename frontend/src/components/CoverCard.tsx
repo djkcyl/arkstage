@@ -109,7 +109,23 @@ export default function CoverCard({
         }}
       >
         {art ? (
-          <img className="cover-img" src={art.url} alt="" loading="lazy" draggable={false} />
+          <img
+            className="cover-img"
+            src={art.url}
+            data-fallback={art.fallbackUrl}
+            onError={(event) => {
+              const fallbackUrl = event.currentTarget.dataset.fallback;
+              if (!fallbackUrl) {
+                setArt(null);
+                return;
+              }
+              delete event.currentTarget.dataset.fallback;
+              event.currentTarget.src = fallbackUrl;
+            }}
+            alt=""
+            loading="lazy"
+            draggable={false}
+          />
         ) : (
           <img className="cover-ph" src="/logo.png" alt="" aria-hidden="true" draggable={false} />
         )}

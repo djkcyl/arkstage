@@ -4,12 +4,12 @@
 // prts 关卡一览/曲谱: each `==篇章==` section lists its member books as `{{/乐章}}`
 // templates (in display order). This is the COMPLETE in-game grouping — strictly
 // more complete than the /回想 subpages, which only list recollection-enabled
-// stories and so drop members like 乌萨斯的孩子们 / 红松林 / 午间逸话 into 特殊.
+// stories and so drop members like 乌萨斯的孩子们 / 红松林 / 午间逸话 into 特殊&未分类.
 //
 // The main story (为了明日 / 主题曲) lists its EPs as a link table rather than
 // {{/乐章}} blocks, so its member list is preserved from the existing
 // storylines.json. Books in no 曲谱 section (集成战略/生息演算 and 联动 events
-// 泰拉饭/源石尘行动/…) fall through to 特殊 at regroup time.
+// 泰拉饭/源石尘行动/…) fall through to 特殊&未分类 at regroup time.
 //
 //   node tools/gen-index/gen-storylines.mjs            # fetch + rebuild
 //   node tools/gen-index/gen-storylines.mjs --report   # also print match report
@@ -34,7 +34,7 @@ const SIDE_LINES = [
 ];
 const LIANDONG_LINE = "联动"; // collab events — not in the 曲谱 StoryLine system; covers from 活动导引图
 // Collab (联动) events, chronological by actId. They have no in-game StoryLine
-// (mixstory) entry, so they get a dedicated 联动 category instead of 特殊, with
+// (mixstory) entry, so they get a dedicated 联动 category instead of 特殊&未分类, with
 // covers from 活动一览's 标题图 (see tools/extract-covers/activity-banner-covers.json).
 const LIANDONG = ["好久不见", "源石尘行动", "落叶逐火", "水晶箭行动", "泰拉饭", "无忧梦呓", "泡影苍霆"];
 const REPORT = process.argv.includes("--report");
@@ -190,9 +190,9 @@ async function main() {
 
   const placed = result.reduce((n, [, k]) => n + k.length, 0);
   const special = [...bookKeys].filter((b) => !claimed.has(b));
-  console.log(`\nPlaced ${placed} books across ${result.length} StoryLines; ${special.length} → 特殊.`);
+  console.log(`\nPlaced ${placed} books across ${result.length} StoryLines; ${special.length} → 特殊&未分类.`);
   if (REPORT) {
-    console.log(`特殊: ${special.join(", ")}`);
+    console.log(`特殊&未分类: ${special.join(", ")}`);
     if (unmatched.length) console.log(`\n乐章 names with no index book (${unmatched.length}): ${unmatched.join(", ")}`);
   }
 

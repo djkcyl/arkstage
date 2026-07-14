@@ -61,6 +61,7 @@ async function main() {
     storylines,
     covers,
     banners,
+    fallbackCategory: "特殊&未分类",
     scenarioLinks: {},
   };
   payload.version = hash(JSON.stringify(payload)).slice(0, 20);

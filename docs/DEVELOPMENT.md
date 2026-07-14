@@ -7,13 +7,13 @@
 ```
 prts.wiki ──HTTP──▶ Rust 后端 ──invoke──▶ React 前端 ──注入 iframe──▶ 原版引擎运行
                        │                                                  │
-resources@GitHub ─jsDelivr─▶ 书架元数据/封面      CDN 资源经 prts-cdn:// 协议「先本地后网络」
+resources@GitHub ─jsDelivr/GitHub Raw─▶ 书架元数据/封面    图片经 prts-cdn://「先本地后网络」
                        └──────────────── 本地缓存 (APPDATA) ───────────────┘
 ```
 
 - **Rust 后端**抓取并解析剧情目录与剧本，管理缓存，并提供自定义 `prts-cdn://` 协议：命中本地的内容寻址仓库（`$APPDATA/media/{host}/{path}`）即离线返回，未命中时（且允许联网）带正确 Referer 拉取并落盘。
 - **前端**在隔离的 `<iframe>` realm 中启动原版引擎（每个剧情独立 realm，避免引擎顶层 `const` 冲突），并复用引擎自身的 `fun_sys_preload()` 精确枚举某剧情所需资源用于预下载。
-- **书架资源**不进入安装包：`BookshelfMetadataContext` 先读 `cache/bookshelf-metadata.json`，每次启动再以 `cache: no-store` 刷新 `https://cdn.jsdelivr.net/gh/djkcyl/arkstage@resources/metadata.json`。封面/横幅使用哈希文件名并经 `prts-cdn://` 懒加载到内容寻址缓存，因此离线可复用，更新分类或封面无需发版。
+- **书架资源**不进入安装包：`BookshelfMetadataContext` 先读 `cache/bookshelf-metadata.json`，每次启动再以 `cache: no-store` 刷新 jsDelivr；网络或格式失败则自动改走 `raw.githubusercontent.com`。只有通过完整校验的响应才会覆盖内存和缓存；双线路都失败时保留旧缓存并显示可重试提示。封面/横幅同样在首选源加载失败后切换另一源，使用哈希文件名并经 `prts-cdn://` 懒加载到内容寻址缓存，因此离线可复用，更新分类或封面无需发版。
 - **PRTS 全局演出表**每次应用生命周期优先拉取最新版本，失败才回退 `widget-bundle-v2` 缓存。引擎启动前会从 `datas_char` 为 `datas_link` 尚未收录的新角色补齐缺失分组；已有的精确位置/尺寸映射始终优先，也可由资源分支的 `scenarioLinks` 下发位置覆盖。
 
 更详细的设计见 [`docs/superpowers/specs`](superpowers/specs) 与 [`docs/superpowers/plans`](superpowers/plans)；架构约定见仓库根 [`CLAUDE.md`](../CLAUDE.md)。
@@ -57,6 +57,7 @@ npm run tauri:build    # 构建当前平台安装包到 src-tauri/target/release
 npm run dev            # 仅启动前端（Vite，浏览器调试用；引擎相关功能需在 Tauri 内运行）
 npm run build          # 仅构建前端（tsc + vite）
 npm run lint           # ESLint
+npm run test:metadata  # 书架元数据校验与 jsDelivr → GitHub 回退单测
 
 # —— 仅后端（Rust / Tauri）——
 cargo test  --manifest-path src-tauri/Cargo.toml   # 后端单元测试
@@ -151,7 +152,7 @@ scripts/run-tests.sh     # 以上全部
 
 - **CI**（`.github/workflows/ci.yml`）：每次 push / PR 运行静态检查；push 时额外为各平台构建安装包并作为 Workflow 产物上传（即「CI 版」）。
 - **Release**（`.github/workflows/release.yml`）：推送 `v*` 版本标签时，为 Android(arm64-v8a APK) / Windows / macOS(Intel + Apple Silicon) / Linux 构建并发布到对应 GitHub Release 的 Assets。标签含连字符（如 `v1.0.0-beta.1`）发布为 **pre-release**。
-- **书架资源**（`.github/workflows/update-storylines.yml`）：手动运行后从 PRTS 重建 StoryLine 分类、从 ArknightsAssets2/PRTS 提取封面和横幅、生成内容哈希清单，并发布到独立 `resources` 分支。客户端下一次启动即通过 jsDelivr 获取。
+- **书架资源**（`.github/workflows/update-storylines.yml`）：手动运行后从 PRTS 重建 StoryLine 分类、从 ArknightsAssets2/PRTS 提取封面和横幅、生成内容哈希清单，并发布到独立 `resources` 分支。客户端下一次启动优先通过 jsDelivr 获取，失败时回退 GitHub Raw。
 
 本地生成同一份资源负载：
 
