@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Regenerate frontend/src/data/storylines.json — the in-game StoryLine ("曲谱")
-// taxonomy used to regroup the story index into 篇章. Authoritative source is
+// Regenerate tools/build-resources/storylines.json — source data for the standalone
+// runtime resources branch. Authoritative source is
 // prts 关卡一览/曲谱: each `==篇章==` section lists its member books as `{{/乐章}}`
 // templates (in display order). This is the COMPLETE in-game grouping — strictly
 // more complete than the /回想 subpages, which only list recollection-enabled
@@ -23,7 +23,7 @@ import * as cheerio from "cheerio";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const OUT_FILE = path.join(REPO_ROOT, "frontend", "src", "data", "storylines.json");
+const OUT_FILE = path.join(REPO_ROOT, "tools", "build-resources", "storylines.json");
 const INDEX_PAGE = "剧情一览"; // fetched live (the index is no longer bundled) for book-key matching
 const HUB = "关卡一览/曲谱";
 const MAIN_LINE = "为了明日"; // main story — kept from existing storylines.json (EP table, not 乐章)

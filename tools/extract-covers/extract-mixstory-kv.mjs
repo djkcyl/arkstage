@@ -16,8 +16,8 @@
 // kv and keep the procedural gradient fallback.
 //
 // Output:
-//   - frontend/src/assets/covers/<sanitize(bookKey)>.webp   (<=420px wide, q80)
-//   - frontend/src/data/cover-dims.json                     ({ "<key>": [w,h] })
+//   - build/resources-source/covers/<sanitize(bookKey)>.webp (<=420px wide, q80)
+//   - build/resources-source/cover-dims.json                 ({ "<key>": [w,h] })
 //
 // Requires ImageMagick (`convert`, `identify`) and Node 18+. Run from anywhere:
 //   node tools/extract-covers/extract-mixstory-kv.mjs
@@ -33,8 +33,9 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const MAP_FILE = path.join(__dirname, "kv-map.json");
-const OUT_DIR = path.join(REPO_ROOT, "frontend", "src", "assets", "covers");
-const DIMS_FILE = path.join(REPO_ROOT, "frontend", "src", "data", "cover-dims.json");
+const SOURCE_DIR = path.join(REPO_ROOT, "build", "resources-source");
+const OUT_DIR = path.join(SOURCE_DIR, "covers");
+const DIMS_FILE = path.join(SOURCE_DIR, "cover-dims.json");
 const TMP_DIR = path.join(os.tmpdir(), "mixstory-kv");
 
 const ASSET_REPO = "ArknightsAssets/ArknightsAssets2";

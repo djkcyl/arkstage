@@ -1,7 +1,8 @@
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import type { Book } from "../lib/bookshelf";
 import { cachedKey } from "../lib/bookshelf";
-import { coverFallback, bannerArt } from "../lib/cover";
+import { coverFallback } from "../lib/cover";
+import { useBookshelfMetadata } from "../lib/BookshelfMetadataContext";
 import { useLongPress } from "../lib/useLongPress";
 import type { StoryChapter } from "../hooks/useStoryIndex";
 
@@ -43,7 +44,17 @@ export default function ChapterDetail({
   onSetMany,
 }: Props) {
   const fallback = coverFallback();
-  const banner = bannerArt(book.coverKey);
+  const { metadata, resolveArt } = useBookshelfMetadata();
+  const [banner, setBanner] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void resolveArt("banners", book.coverKey).then((art) => {
+      if (alive) setBanner(art?.url ?? null);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [book.coverKey, metadata?.version, resolveArt]);
   // Default: all chapters open.
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
 

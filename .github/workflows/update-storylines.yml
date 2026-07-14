@@ -1,8 +1,7 @@
-# Regenerate the StoryLine taxonomy (frontend/src/data/storylines.json) from
-# prts.wiki, on manual demand. Runs the SAME script as local use
-# (tools/gen-index/gen-storylines.mjs) and commits storylines.json if it changed.
-# The story index itself is no longer bundled — it's fetched at runtime from prts.
-name: update-storylines
+# Regenerate the StoryLine taxonomy and publish the standalone runtime bookshelf
+# payload to the `resources` branch. The app refreshes metadata.json through
+# jsDelivr on every launch, so taxonomy/cover updates do not require a new release.
+name: update-bookshelf-resources
 
 on:
   workflow_dispatch:
@@ -32,14 +31,37 @@ jobs:
       - name: Regenerate StoryLine taxonomy
         run: node tools/gen-index/gen-storylines.mjs
 
-      - name: Commit if changed
+      - name: Build covers and resource payload
+        run: |
+          node tools/extract-covers/extract-mixstory-kv.mjs
+          node tools/extract-covers/extract-banner-covers.mjs
+          node tools/extract-covers/extract-chapter-banners.mjs
+          node tools/build-resources/build-bookshelf-resources.mjs /tmp/arkstage-resources
+
+      - name: Commit taxonomy source if changed
         run: |
           git config user.name "arkstage-index[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add frontend/src/data/storylines.json
+          git add tools/build-resources/storylines.json
           if git diff --cached --quiet; then
             echo "Taxonomy already up to date — nothing to commit."
-            exit 0
+          else
+            git commit -m "chore(taxonomy): refresh storylines from prts.wiki [skip ci]"
+            git push
           fi
-          git commit -m "chore(taxonomy): refresh storylines.json from prts.wiki [skip ci]"
-          git push
+
+      - name: Publish resources branch
+        run: |
+          git fetch origin resources
+          git worktree add -B resources /tmp/arkstage-resources-branch origin/resources
+          rsync -a --delete --exclude=.git /tmp/arkstage-resources/ /tmp/arkstage-resources-branch/
+          cd /tmp/arkstage-resources-branch
+          git config user.name "arkstage-index[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Runtime resources already up to date — nothing to publish."
+          else
+            git commit -m "data: publish runtime bookshelf resources [skip ci]"
+            git push origin resources
+          fi

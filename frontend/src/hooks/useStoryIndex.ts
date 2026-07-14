@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { regroupStoryIndex } from "../lib/storylines";
+import { useBookshelfMetadata } from "../lib/BookshelfMetadataContext";
 
 export interface StoryIndex {
   categories: StoryCategory[];
@@ -27,9 +28,14 @@ export interface StoryEntry {
  * Fetch story index with cache-first strategy.
  */
 export function useStoryIndex() {
-  const [index, setIndex] = useState<StoryIndex | null>(null);
+  const [rawIndex, setRawIndex] = useState<StoryIndex | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { metadata } = useBookshelfMetadata();
+  const index = useMemo(
+    () => (rawIndex ? regroupStoryIndex(rawIndex, metadata?.storylines ?? []) : null),
+    [rawIndex, metadata]
+  );
 
   const fetchIndex = useCallback(async () => {
     setLoading(true);
@@ -43,17 +49,17 @@ export function useStoryIndex() {
 
       if (cached) {
         const parsed = JSON.parse(cached) as StoryIndex;
-        setIndex(regroupStoryIndex(parsed));
+        setRawIndex(parsed);
         setLoading(false);
 
         // Refresh in background
-        refreshIndex(setIndex).catch(() => {});
+        refreshIndex(setRawIndex).catch(() => {});
         return;
       }
 
       // No cache — fetch from prts.wiki (the index is no longer bundled). On the
       // first launch this needs a network connection; the error path offers retry.
-      await refreshIndex(setIndex);
+      await refreshIndex(setRawIndex);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -69,10 +75,10 @@ export function useStoryIndex() {
 }
 
 async function refreshIndex(
-  setIndex: (idx: StoryIndex) => void
+  setRawIndex: (idx: StoryIndex) => void
 ): Promise<void> {
   const fresh = await invoke<StoryIndex>("fetch_story_index");
-  setIndex(regroupStoryIndex(fresh));
+  setRawIndex(fresh);
 
   // Cache the raw fresh index; regrouping is applied on read.
   await invoke("save_to_cache", {

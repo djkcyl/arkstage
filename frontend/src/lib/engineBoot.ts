@@ -1,6 +1,7 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { PROXY_BASE, WIKI_CDN_DOMAINS, proxyUrl, rewriteAllCdnUrls } from "./proxy";
 import { captureIframe, pushLog } from "./debugLog";
+import { scenarioLinkOverrides, type ScenarioLinkOverride } from "./BookshelfMetadataContext";
 
 /**
  * Boots the original PRTS ScenarioSimulator engine inside an ISOLATED <iframe>
@@ -102,6 +103,12 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   idoc.write(`<!DOCTYPE html><html><head><meta charset="utf-8">${baseStyle}</head><body style="margin:0;background:#000;">${heading}${domHtml}${dataBlocksHtml}</body></html>`);
   idoc.close();
 
+  // PRTS updates the global image table and the character-link table separately.
+  // During that window new scripts/images exist but `datas_link` lacks their base
+  // groups, so charLink("avg_x#1$2") aborts before the image URL is even looked up.
+  // Recover missing groups from datas_char itself; existing precise layouts win.
+  repairScenarioLinks(idoc, scenarioLinkOverrides());
+
   // Capture engine-side errors (uncaught script errors, failed asset loads, console)
   // BEFORE any engine script runs, so the real cause of a stuck boot is visible.
   captureIframe(iwin);
@@ -147,6 +154,77 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   installWindowedFit(iwin, idoc);
   reportBootHealth(iwin);
   return {};
+}
+
+interface ScenarioLink {
+  pos: { x: number; y: number };
+  size: { x: number; y: number };
+  array: { alias: string; name: string }[];
+}
+
+/**
+ * Fill only missing `datas_link` groups from the canonical image keys already in
+ * `datas_char`. This is intentionally generic: future upstream table races heal
+ * without shipping another hard-coded character list.
+ */
+export function repairScenarioLinks(
+  doc: Document,
+  overrides: Record<string, ScenarioLinkOverride> = {}
+): number {
+  const charNode = doc.getElementById("datas_char");
+  const linkNode = doc.getElementById("datas_link");
+  if (!charNode || !linkNode) return 0;
+
+  let links: Record<string, ScenarioLink>;
+  try {
+    links = JSON.parse(linkNode.textContent || "{}");
+  } catch {
+    return 0;
+  }
+
+  const grouped = new Map<string, { name: string; group: number; expression: number }[]>();
+  for (const line of (charNode.textContent || "").split("\n")) {
+    const name = line.split(",", 1)[0]?.trim().toLowerCase();
+    if (!name) continue;
+    // base$G or base-N$G. The optional expression suffix is the final `-digits`
+    // only, so hyphens elsewhere in a character ID remain part of the base.
+    const match = /^(.+?)(?:-(\d+))?\$(\d+)$/.exec(name);
+    if (!match) continue;
+    const base = match[1];
+    const expression = Number(match[2] ?? 0);
+    const group = Number(match[3]);
+    const entries = grouped.get(base) ?? [];
+    entries.push({ name, group, expression });
+    grouped.set(base, entries);
+  }
+
+  let added = 0;
+  for (const [base, entries] of grouped) {
+    if (links[base]) continue;
+    entries.sort((a, b) => {
+      // The engine treats #1 as the first numbered expression. A rare unsuffixed
+      // base$G entry is a fallback and belongs after base-N$G entries (matching
+      // PRTS' maintained link tables), never before expression 1.
+      const ae = a.expression === 0 ? Number.MAX_SAFE_INTEGER : a.expression;
+      const be = b.expression === 0 ? Number.MAX_SAFE_INTEGER : b.expression;
+      return a.group - b.group || ae - be || a.name.localeCompare(b.name);
+    });
+    const layout = overrides[base] ?? {
+      pos: { x: 0, y: 160 },
+      size: { x: 1024, y: 1024 },
+    };
+    links[base] = {
+      pos: { ...layout.pos },
+      size: { ...layout.size },
+      array: entries.map(({ name }) => ({ alias: "", name })),
+    };
+    added++;
+  }
+  if (added > 0) {
+    linkNode.textContent = JSON.stringify(links);
+    pushLog("info", `[engine] repaired ${added} missing character link groups`);
+  }
+  return added;
 }
 
 /**

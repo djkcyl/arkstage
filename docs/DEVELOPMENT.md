@@ -7,11 +7,14 @@
 ```
 prts.wiki ──HTTP──▶ Rust 后端 ──invoke──▶ React 前端 ──注入 iframe──▶ 原版引擎运行
                        │                                                  │
-                  本地缓存 (APPDATA)                 运行时 CDN 资源经 prts-cdn:// 协议「先本地后网络」
+resources@GitHub ─jsDelivr─▶ 书架元数据/封面      CDN 资源经 prts-cdn:// 协议「先本地后网络」
+                       └──────────────── 本地缓存 (APPDATA) ───────────────┘
 ```
 
 - **Rust 后端**抓取并解析剧情目录与剧本，管理缓存，并提供自定义 `prts-cdn://` 协议：命中本地的内容寻址仓库（`$APPDATA/media/{host}/{path}`）即离线返回，未命中时（且允许联网）带正确 Referer 拉取并落盘。
 - **前端**在隔离的 `<iframe>` realm 中启动原版引擎（每个剧情独立 realm，避免引擎顶层 `const` 冲突），并复用引擎自身的 `fun_sys_preload()` 精确枚举某剧情所需资源用于预下载。
+- **书架资源**不进入安装包：`BookshelfMetadataContext` 先读 `cache/bookshelf-metadata.json`，每次启动再以 `cache: no-store` 刷新 `https://cdn.jsdelivr.net/gh/djkcyl/arkstage@resources/metadata.json`。封面/横幅使用哈希文件名并经 `prts-cdn://` 懒加载到内容寻址缓存，因此离线可复用，更新分类或封面无需发版。
+- **PRTS 全局演出表**每次应用生命周期优先拉取最新版本，失败才回退 `widget-bundle-v2` 缓存。引擎启动前会从 `datas_char` 为 `datas_link` 尚未收录的新角色补齐缺失分组；已有的精确位置/尺寸映射始终优先，也可由资源分支的 `scenarioLinks` 下发位置覆盖。
 
 更详细的设计见 [`docs/superpowers/specs`](superpowers/specs) 与 [`docs/superpowers/plans`](superpowers/plans)；架构约定见仓库根 [`CLAUDE.md`](../CLAUDE.md)。
 
@@ -126,6 +129,7 @@ arkstage/
 │     ├─ android_service.rs  # 横屏 / 沉浸式 / 前台保活
 │     └─ lib.rs              # prts-cdn:// 协议 + 命令注册
 ├─ scripts/                  # 构建 / 测试 / 清理脚本
+├─ tools/build-resources/    # 书架分类源 + 独立 resources 分支生成器
 ├─ docs/                     # 开发者文档、构建指南、设计 spec/plan
 ├─ build/                    # 构建产物：dist/（前端 bundle）+ artifacts/（安装包/APK）
 └─ .github/workflows/        # CI 与 Release 工作流
@@ -147,6 +151,17 @@ scripts/run-tests.sh     # 以上全部
 
 - **CI**（`.github/workflows/ci.yml`）：每次 push / PR 运行静态检查；push 时额外为各平台构建安装包并作为 Workflow 产物上传（即「CI 版」）。
 - **Release**（`.github/workflows/release.yml`）：推送 `v*` 版本标签时，为 Android(arm64-v8a APK) / Windows / macOS(Intel + Apple Silicon) / Linux 构建并发布到对应 GitHub Release 的 Assets。标签含连字符（如 `v1.0.0-beta.1`）发布为 **pre-release**。
+- **书架资源**（`.github/workflows/update-storylines.yml`）：手动运行后从 PRTS 重建 StoryLine 分类、从 ArknightsAssets2/PRTS 提取封面和横幅、生成内容哈希清单，并发布到独立 `resources` 分支。客户端下一次启动即通过 jsDelivr 获取。
+
+本地生成同一份资源负载：
+
+```bash
+node tools/gen-index/gen-storylines.mjs
+node tools/extract-covers/extract-mixstory-kv.mjs
+node tools/extract-covers/extract-banner-covers.mjs
+node tools/extract-covers/extract-chapter-banners.mjs
+node tools/build-resources/build-bookshelf-resources.mjs build/resources
+```
 
 ⚠️ **发版铁律**：发版前必须把 `package.json` 的 `version` 一并 bump 到 master 再打标签。应用内「检测更新」的首选源读取的就是 master 上 `package.json` 的 `version`（`cdn.jsdelivr.net/gh/<repo>@master/package.json`），漏 bump 会导致检测不到新版本。
 
