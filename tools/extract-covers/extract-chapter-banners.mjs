@@ -6,7 +6,7 @@
 //
 // Map: chapter-banner-map.json  ({ bookKey: "<prts File name>" }) — generated from
 // storylines.json × the 活动一览 SMW 标题图文件名 property.
-// Output: frontend/src/assets/banners/<sanitize(bookKey)>.webp (<=560px wide).
+// Output: build/resources-source/banners/<sanitize(bookKey)>.webp (<=560px wide).
 //
 //   node tools/extract-covers/extract-chapter-banners.mjs
 //
@@ -22,8 +22,9 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const MAP_FILE = path.join(__dirname, "chapter-banner-map.json");
-const OUT_DIR = path.join(REPO_ROOT, "frontend", "src", "assets", "banners");
-const COVERS_DIR = path.join(REPO_ROOT, "frontend", "src", "assets", "covers");
+const SOURCE_DIR = path.join(REPO_ROOT, "build", "resources-source");
+const OUT_DIR = path.join(SOURCE_DIR, "banners");
+const COVERS_DIR = path.join(SOURCE_DIR, "covers");
 const TMP_DIR = path.join(os.tmpdir(), "chapter-banners");
 const MAX_WIDTH = 560;
 const API = "https://prts.wiki/api.php";

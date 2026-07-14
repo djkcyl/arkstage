@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { bootEngineInFrame } from "../lib/engineBoot";
 import { loadBundle } from "../lib/predownload";
 import { setReading } from "../lib/keepalive";
+import { useCompression } from "../lib/CompressionContext";
 import { markRead, setLastWatched } from "../lib/readState";
 import { setLandscape } from "../lib/orientation";
 import { setImmersive } from "../lib/immersive";
@@ -29,6 +30,14 @@ export default function StoryPlayerPage() {
   const [error, setError] = useState<string | null>(null);
 
   const decodedTitle = pageTitle ? decodeURIComponent(pageTitle) : "";
+  const { busy: compressionBusy } = useCompression();
+
+  // Safety net: if a compression batch is active (e.g. the app restarted onto a
+  // restored /play route while the batch resumes), bounce out of the reader —
+  // reading would fetch+write media the batch is concurrently rewriting.
+  useEffect(() => {
+    if (compressionBusy) navigate("/browse", { replace: true });
+  }, [compressionBusy, navigate]);
 
   // Drive the Android keep-alive notification's "reading a story" state.
   useEffect(() => {

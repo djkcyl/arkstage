@@ -31,7 +31,7 @@ const STORYLINE_ICONS: Record<string, string> = {
   泰拉奇谈: ts,
 };
 
-/** Icon URL for a StoryLine category name, or undefined (主线/特殊 have no icon). */
+/** Icon URL for a StoryLine category name, or undefined (主线/未分类 have no icon). */
 export function storylineIcon(name: string): string | undefined {
   return STORYLINE_ICONS[name];
 }

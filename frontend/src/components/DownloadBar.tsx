@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useDownload } from "../lib/DownloadContext";
+import { useCompression } from "../lib/CompressionContext";
 import { copyText } from "../lib/diagnostics";
 
 /** Dismissible summary panel for a finished run, with copyable failure list. */
@@ -75,18 +76,100 @@ function ProgressRow({ label, pct, dim }: { label: string; pct: number; dim?: bo
   );
 }
 
+/** Dismissible summary panel for a finished compression run. */
+function CompressResultPanel() {
+  const { result, dismissResult } = useCompression();
+  if (!result) return null;
+  return (
+    <div className="dl-result-overlay" onClick={dismissResult}>
+      <div className="dl-result" onClick={(e) => e.stopPropagation()}>
+        <div className="dl-result-msg">{result.message}</div>
+        <div className="dl-result-actions">
+          <button className="nav-btn" onClick={dismissResult}>
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Bottom bar mirroring the download bar, for the image-compression batch. */
+function CompressBar() {
+  const { status, pause, resume, cancel } = useCompression();
+  if (!status) return null;
+  const pct = status.total > 0 ? (status.done / status.total) * 100 : 0;
+  const prefix = status.status === "paused" ? "已暂停·" : "";
+  const freed = `${(status.freedBytes / 1024 / 1024).toFixed(1)} MB`;
+  const label = `${prefix}压缩中 ${status.done}/${status.total}`;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        bottom: 0,
+        left: 0,
+        right: 0,
+        padding: "6px 16px",
+        background: "rgba(0,0,0,0.85)",
+        color: "#f4c430",
+        fontSize: "12px",
+        zIndex: 9999,
+        display: "flex",
+        alignItems: "center",
+        gap: "12px",
+      }}
+    >
+      <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", gap: "4px" }}>
+        <ProgressRow label={label} pct={pct} />
+      </div>
+      <span style={{ flex: "0 0 auto", minWidth: "72px", textAlign: "right" }}>已省 {freed}</span>
+      <button
+        className="nav-btn"
+        style={{ fontSize: "12px" }}
+        onClick={() => (status.status === "paused" ? resume() : pause())}
+      >
+        {status.status === "paused" ? "继续" : "暂停"}
+      </button>
+      <button className="nav-btn" style={{ fontSize: "12px" }} onClick={cancel}>
+        取消
+      </button>
+    </div>
+  );
+}
+
 /**
  * Global, high-priority download progress. Rendered above the routes so it
  * persists across navigation; hidden only inside the reader (`/play/*`).
  * Indexing (索引) and downloading (下载) run concurrently, so it shows BOTH bars.
+ * A compression batch (记忆重组) is mutually exclusive with downloads and takes
+ * the bar when active.
  */
 export default function DownloadBar() {
   const { status, session } = useDownload();
+  const compression = useCompression();
   const { pathname } = useLocation();
 
   if (pathname.startsWith("/play/")) return null;
+  // Compression batch takes priority (downloads are gated off while it runs).
+  // Keep the download <ResultPanel/> mounted too, so a "downloads blocked while
+  // compressing" warning shows IMMEDIATELY rather than only after the batch ends.
+  if (compression.status) {
+    return (
+      <>
+        <CompressBar />
+        <CompressResultPanel />
+        <ResultPanel />
+      </>
+    );
+  }
   // The result panel shows after a run (status cleared); the progress bar only while running.
-  if (!status) return <ResultPanel />;
+  if (!status)
+    return (
+      <>
+        <ResultPanel />
+        <CompressResultPanel />
+      </>
+    );
 
   const togglePause = () => {
     if (!session) return;

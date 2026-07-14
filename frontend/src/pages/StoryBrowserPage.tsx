@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useStoryIndex } from "../hooks/useStoryIndex";
 import { useDownload } from "../lib/DownloadContext";
+import { useCompression } from "../lib/CompressionContext";
 import { buildShelves } from "../lib/bookshelf";
 import { getReadStories, getLastWatched } from "../lib/readState";
 import type { Book, Shelf } from "../lib/bookshelf";
@@ -64,6 +65,7 @@ export default function StoryBrowserPage() {
   const [readStories, setReadStories] = useState<Set<string>>(() => getReadStories());
   const [lastWatched, setLastWatchedState] = useState<string | null>(() => getLastWatched());
   const { start: startPredownload, busy, status, onFinished } = useDownload();
+  const { busy: compressionBusy } = useCompression();
 
   // Re-read read-state + last-watched whenever the window regains focus (e.g.
   // after the player route unmounts back to here).
@@ -178,7 +180,16 @@ export default function StoryBrowserPage() {
   };
 
   // ----- play / download / delete -----
-  const playStory = (pageTitle: string) => navigate(`/play/${encodeURIComponent(pageTitle)}`);
+  const playStory = (pageTitle: string) => {
+    // While a compression batch is rewriting the store, block entering the reader:
+    // reading an uncached story would fetch + write media that the batch is
+    // simultaneously transcoding. Downloads are gated for the same reason.
+    if (compressionBusy) {
+      alert("正在压缩资源，请等待压缩完成后再阅读剧情。");
+      return;
+    }
+    navigate(`/play/${encodeURIComponent(pageTitle)}`);
+  };
 
   const fmtSize = (b: number): string =>
     b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`;

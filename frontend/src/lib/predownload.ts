@@ -51,13 +51,37 @@ export function isOfflineError(e: unknown): boolean {
   return String(e instanceof Error ? e.message : e).includes("PRTS_OFFLINE");
 }
 
+// One fresh-first request per app lifetime. The bundle contains PRTS's GLOBAL
+// background/character/link databases; treating it as an eternal cache made every
+// new event miss its art until the user manually cleared all cache. Network failure
+// falls back to the last successful bundle so already-cached stories remain usable.
+let bundlePromise: Promise<WidgetBundle> | null = null;
+
 /** Load the shared widget bundle (engine DOM + scripts + global databases). */
-export async function loadBundle(): Promise<WidgetBundle> {
-  const cached = await invoke<string | null>("load_from_cache", { key: "widget-bundle-v2" });
-  if (cached) return JSON.parse(cached) as WidgetBundle;
-  const b = await invoke<WidgetBundle>("fetch_widget_bundle", { pageTitle: "W2G/BEG" });
-  await invoke("save_to_cache", { key: "widget-bundle-v2", data: JSON.stringify(b) }).catch(() => {});
-  return b;
+export function loadBundle(): Promise<WidgetBundle> {
+  if (!bundlePromise) bundlePromise = refreshBundle();
+  return bundlePromise;
+}
+
+async function refreshBundle(): Promise<WidgetBundle> {
+  let cached: WidgetBundle | null = null;
+  try {
+    const raw = await invoke<string | null>("load_from_cache", { key: "widget-bundle-v2" });
+    if (raw) cached = JSON.parse(raw) as WidgetBundle;
+  } catch {
+    // Continue with the live request.
+  }
+  try {
+    const fresh = await invoke<WidgetBundle>("fetch_widget_bundle", { pageTitle: "W2G/BEG" });
+    await invoke("save_to_cache", {
+      key: "widget-bundle-v2",
+      data: JSON.stringify(fresh),
+    }).catch(() => {});
+    return fresh;
+  } catch (error) {
+    if (cached) return cached;
+    throw error;
+  }
 }
 
 /** Fetch+cache a story's script if needed, returning its raw scenario text. */

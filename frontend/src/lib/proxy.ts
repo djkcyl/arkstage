@@ -5,6 +5,8 @@ export const WIKI_CDN_DOMAINS = [
   "static.prts.wiki",
   "media.prts.wiki",
   "torappu.prts.wiki",
+  "cdn.jsdelivr.net",
+  "raw.githubusercontent.com",
 ];
 
 // Chromium-based WebViews (Windows WebView2, Android system WebView) serve the

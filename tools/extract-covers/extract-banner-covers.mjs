@@ -8,8 +8,8 @@
 //
 // Source: prts.wiki File:<name> (resolved via the imageinfo API → media URL).
 // Map: activity-banner-covers.json  ({ bookKey: "<prts File name>" }).
-// Output: merges into frontend/src/assets/covers/<sanitize(bookKey)>.webp and the
-// existing frontend/src/data/cover-dims.json (run AFTER extract-mixstory-kv.mjs).
+// Output: merges into build/resources-source/covers/<sanitize(bookKey)>.webp and
+// build/resources-source/cover-dims.json (run AFTER extract-mixstory-kv.mjs).
 //
 //   node tools/extract-covers/extract-banner-covers.mjs
 //
@@ -24,8 +24,9 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const MAP_FILE = path.join(__dirname, "activity-banner-covers.json");
-const OUT_DIR = path.join(REPO_ROOT, "frontend", "src", "assets", "covers");
-const DIMS_FILE = path.join(REPO_ROOT, "frontend", "src", "data", "cover-dims.json");
+const SOURCE_DIR = path.join(REPO_ROOT, "build", "resources-source");
+const OUT_DIR = path.join(SOURCE_DIR, "covers");
+const DIMS_FILE = path.join(SOURCE_DIR, "cover-dims.json");
 const TMP_DIR = path.join(os.tmpdir(), "banner-covers");
 const MAX_WIDTH = 480;
 const API = "https://prts.wiki/api.php";

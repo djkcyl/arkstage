@@ -9,8 +9,10 @@ import HelpPage from "./pages/HelpPage";
 import DebugConsole from "./components/DebugConsole";
 import DownloadBar from "./components/DownloadBar";
 import { DownloadProvider } from "./lib/DownloadContext";
+import { CompressionProvider } from "./lib/CompressionContext";
 import { applyPersistedDownloadSettings } from "./lib/predownload";
 import { startKeepalive } from "./lib/keepalive";
+import { BookshelfMetadataProvider } from "./lib/BookshelfMetadataContext";
 
 export default function App() {
   // Re-apply the user's saved concurrency / bandwidth limit to the backend once
@@ -25,6 +27,8 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <BookshelfMetadataProvider>
+      <CompressionProvider>
       <DownloadProvider>
         <Routes>
           <Route path="/" element={<HomePage />} />
@@ -38,6 +42,8 @@ export default function App() {
         <DownloadBar />
         <DebugConsole />
       </DownloadProvider>
+      </CompressionProvider>
+      </BookshelfMetadataProvider>
     </BrowserRouter>
   );
 }

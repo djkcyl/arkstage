@@ -1,5 +1,6 @@
 mod android_service;
 mod commands;
+mod compress;
 mod data_root;
 mod download;
 mod media;
@@ -18,6 +19,24 @@ fn respond_err(responder: tauri::UriSchemeResponder, status: u16, msg: String) {
         .body(msg.into_bytes())
         .unwrap();
     responder.respond(r);
+}
+
+/// Content-type from the file's magic bytes, falling back to the extension. Needed
+/// because the compression feature stores WebP bytes under the original `.png`
+/// key, so the extension can lie. `<img>` sniffs anyway, but a correct header is
+/// the robust choice (and matters for any non-`<img>` consumer).
+fn sniff_content_type(bytes: &[u8], path: &str) -> &'static str {
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        "image/webp"
+    } else if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        "image/png"
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "image/jpeg"
+    } else if bytes.starts_with(b"GIF8") {
+        "image/gif"
+    } else {
+        guess_content_type(path)
+    }
 }
 
 /// Guess content-type from file extension.
@@ -89,15 +108,16 @@ pub fn run() {
 
             let query = uri.query().map(|q| format!("?{}", q)).unwrap_or_default();
             let target_url = format!("https://{}{}", path, query);
-            let content_type = guess_content_type(path);
 
             let media_root = media::media_root(&data_root::data_root());
 
             // 1) Serve from local content-addressed store if present (offline).
             if let Some(bytes) = media::read_local(&media_root, &target_url) {
+                // Sniff: a `.png` key may hold WebP bytes after compression.
+                let ct = sniff_content_type(&bytes, path);
                 let r = tauri::http::Response::builder()
                     .status(200)
-                    .header("Content-Type", content_type)
+                    .header("Content-Type", ct)
                     .header("Access-Control-Allow-Origin", "*")
                     .body(bytes)
                     .unwrap();
@@ -118,7 +138,10 @@ pub fn run() {
             }
 
             // 3) Online: fetch, persist to store (cache-through), serve.
+            // Own the path for the async block (the borrowed `uri` doesn't live to 'static).
+            let path = path.to_string();
             tauri::async_runtime::spawn(async move {
+                let path = path.as_str();
                 let client = net::client();
                 match client
                     .get(&target_url)
@@ -127,21 +150,21 @@ pub fn run() {
                     .await
                 {
                     Ok(resp) if resp.status().is_success() => {
-                        let ct = resp
-                            .headers()
-                            .get("content-type")
-                            .and_then(|v| v.to_str().ok())
-                            .unwrap_or(content_type)
-                            .to_string();
-
                         match resp.bytes().await {
                             Ok(bytes) => {
-                                let _ = media::write_local(&media_root, &target_url, &bytes);
+                                // Real-time compression: when a tier is enabled and
+                                // this is an image, store + serve the WebP bytes.
+                                let stored = compress::maybe_transcode_image(
+                                    &target_url,
+                                    bytes.to_vec(),
+                                );
+                                let _ = media::write_local(&media_root, &target_url, &stored);
+                                let ct = sniff_content_type(&stored, path);
                                 let r = tauri::http::Response::builder()
                                     .status(200)
                                     .header("Content-Type", ct)
                                     .header("Access-Control-Allow-Origin", "*")
-                                    .body(bytes.to_vec())
+                                    .body(stored)
                                     .unwrap();
                                 responder.respond(r);
                             }
@@ -192,6 +215,8 @@ pub fn run() {
             }
             // Register the managed download engine (bulk predownload jobs).
             download::init(app.handle());
+            // Restore compression mode + resume an interrupted batch if any.
+            compress::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -227,6 +252,15 @@ pub fn run() {
             // Network policy
             net::set_allow_online,
             net::get_allow_online,
+            // Client-side image compression (资源压缩)
+            compress::compress_estimate,
+            compress::compress_get_config,
+            compress::compress_start,
+            compress::compress_pause,
+            compress::compress_resume,
+            compress::compress_cancel,
+            compress::compress_status,
+            compress::compress_disable_realtime,
             // Screen orientation (player forces landscape; elsewhere free) +
             // immersive system-bar hiding (player only)
             android_service::set_orientation,

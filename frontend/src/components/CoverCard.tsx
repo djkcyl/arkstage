@@ -1,7 +1,8 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Book } from "../lib/bookshelf";
 import { cachedKey } from "../lib/bookshelf";
-import { coverFallback, coverArt } from "../lib/cover";
+import { coverFallback } from "../lib/cover";
+import { useBookshelfMetadata, type ResolvedArt } from "../lib/BookshelfMetadataContext";
 import { useLongPress } from "../lib/useLongPress";
 
 interface Props {
@@ -43,7 +44,17 @@ export default function CoverCard({
 }: Props) {
   const isLastWatched = !!lastWatched && book.pageTitles.includes(lastWatched);
   const fallback = coverFallback();
-  const art = useMemo(() => coverArt(book.coverKey), [book.coverKey]);
+  const { metadata, resolveArt } = useBookshelfMetadata();
+  const [art, setArt] = useState<ResolvedArt | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void resolveArt("covers", book.coverKey).then((next) => {
+      if (alive) setArt(next);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [book.coverKey, metadata?.version, resolveArt]);
   const ratio = art ? art.width / art.height : 0;
   // Wide 联动 + 集成战略/生息演算 导引图 banners (ratio ≈ 3) keep their own wide
   // shape; every other card is a uniform square (为了明日's 1:1) with the art
@@ -98,7 +109,23 @@ export default function CoverCard({
         }}
       >
         {art ? (
-          <img className="cover-img" src={art.url} alt="" loading="lazy" draggable={false} />
+          <img
+            className="cover-img"
+            src={art.url}
+            data-fallback={art.fallbackUrl}
+            onError={(event) => {
+              const fallbackUrl = event.currentTarget.dataset.fallback;
+              if (!fallbackUrl) {
+                setArt(null);
+                return;
+              }
+              delete event.currentTarget.dataset.fallback;
+              event.currentTarget.src = fallbackUrl;
+            }}
+            alt=""
+            loading="lazy"
+            draggable={false}
+          />
         ) : (
           <img className="cover-ph" src="/logo.png" alt="" aria-hidden="true" draggable={false} />
         )}
