@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "99377b221d2fb90798f4",
+  "version": "1d53c056d4c56596f732",
   "storylines": [
     [
       "为了明日",
@@ -1063,5 +1063,6 @@
       "height": 179
     }
   },
+  "fallbackCategory": "特殊&未分类",
   "scenarioLinks": {}
 }
