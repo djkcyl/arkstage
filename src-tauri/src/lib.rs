@@ -112,7 +112,7 @@ pub fn run() {
             let media_root = media::media_root(&data_root::data_root());
 
             // 1) Serve from local content-addressed store if present (offline).
-            if let Some(bytes) = media::read_local(&media_root, &target_url) {
+            if let Some(bytes) = media::read_local_validated(&media_root, &target_url) {
                 // Sniff: a `.png` key may hold WebP bytes after compression.
                 let ct = sniff_content_type(&bytes, path);
                 let r = tauri::http::Response::builder()
@@ -152,6 +152,15 @@ pub fn run() {
                     Ok(resp) if resp.status().is_success() => {
                         match resp.bytes().await {
                             Ok(bytes) => {
+                                if let Err(error) = media::validate_asset_bytes(&target_url, &bytes)
+                                {
+                                    respond_err(
+                                        responder,
+                                        502,
+                                        format!("Invalid upstream asset: {error}"),
+                                    );
+                                    return;
+                                }
                                 // Real-time compression: when a tier is enabled and
                                 // this is an image, store + serve the WebP bytes.
                                 let stored = compress::maybe_transcode_image(
@@ -224,6 +233,8 @@ pub fn run() {
             wiki::fetch_story_index,
             wiki::fetch_story_page,
             wiki::fetch_widget_bundle,
+            wiki::fetch_story_runtime,
+            wiki::fetch_page_revisions,
             // Cache management
             cache::save_to_cache,
             cache::load_from_cache,
@@ -236,6 +247,7 @@ pub fn run() {
             assets::download_asset,
             assets::get_asset_path,
             assets::read_asset_text,
+            assets::refresh_engine_asset,
             // Managed bulk downloads
             download::download_start,
             download::download_add,

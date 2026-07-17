@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { bootEngineInFrame, prewarmEngineDeps } from "./engineBoot";
+import { bootEngineInFrame, prewarmEngineDeps, refreshEngineDeps } from "./engineBoot";
 import type { WidgetBundle } from "./engineBoot";
 import { setManifestProgress } from "./keepalive";
 
@@ -56,6 +56,18 @@ export function isOfflineError(e: unknown): boolean {
 // new event miss its art until the user manually cleared all cache. Network failure
 // falls back to the last successful bundle so already-cached stories remain usable.
 let bundlePromise: Promise<WidgetBundle> | null = null;
+const storyRuntimePromises = new Map<string, Promise<StoryRuntime>>();
+
+interface RawStoryRuntime {
+  story: { script: string; title: string };
+  bundle: WidgetBundle;
+  revision: string;
+}
+
+export interface StoryRuntime extends RawStoryRuntime {
+  source: "live" | "cache" | "legacy-cache";
+  warning?: string;
+}
 
 /** Load the shared widget bundle (engine DOM + scripts + global databases). */
 export function loadBundle(): Promise<WidgetBundle> {
@@ -66,34 +78,146 @@ export function loadBundle(): Promise<WidgetBundle> {
 async function refreshBundle(): Promise<WidgetBundle> {
   let cached: WidgetBundle | null = null;
   try {
-    const raw = await invoke<string | null>("load_from_cache", { key: "widget-bundle-v2" });
+    const raw = await invoke<string | null>("load_from_cache", { key: "widget-bundle-v3" })
+      || await invoke<string | null>("load_from_cache", { key: "widget-bundle-v2" });
     if (raw) cached = JSON.parse(raw) as WidgetBundle;
   } catch {
     // Continue with the live request.
   }
   try {
     const fresh = await invoke<WidgetBundle>("fetch_widget_bundle", { pageTitle: "W2G/BEG" });
+    if (cached && isSuspiciousRegression(fresh, cached)) {
+      throw new Error("PRTS 全局资源表数量异常回退，已拒绝覆盖本地可用版本");
+    }
     await invoke("save_to_cache", {
-      key: "widget-bundle-v2",
+      key: "widget-bundle-v3",
       data: JSON.stringify(fresh),
     }).catch(() => {});
+    await refreshEngineDeps();
     return fresh;
   } catch (error) {
-    if (cached) return cached;
+    if (cached) {
+      await refreshEngineDeps();
+      return cached;
+    }
+    throw error;
+  }
+}
+
+function isSuspiciousRegression(fresh: WidgetBundle, cached: WidgetBundle): boolean {
+  const a = fresh.diagnostics;
+  const b = cached.diagnostics;
+  if (!a || !b) return false;
+  return a.background_entries < b.background_entries * 0.8
+    || a.character_entries < b.character_entries * 0.8
+    || a.link_groups < b.link_groups * 0.8
+    || a.engine_script_count < b.engine_script_count;
+}
+
+/** Exact-page, fresh-first script + engine/data snapshot for interactive playback. */
+export function loadStoryRuntime(title: string): Promise<StoryRuntime> {
+  let promise = storyRuntimePromises.get(title);
+  if (!promise) {
+    promise = refreshStoryRuntime(title);
+    storyRuntimePromises.set(title, promise);
+  }
+  return promise;
+}
+
+async function refreshStoryRuntime(title: string): Promise<StoryRuntime> {
+  const key = `story-runtime-v3_${title.replace(/\//g, "_")}`;
+  let cached: RawStoryRuntime | null = null;
+  try {
+    const raw = await invoke<string | null>("load_from_cache", { key });
+    if (raw) cached = JSON.parse(raw) as RawStoryRuntime;
+  } catch {
+    // Continue with live fetch.
+  }
+  try {
+    const fresh = await invoke<RawStoryRuntime>("fetch_story_runtime", { pageTitle: title });
+    if (cached && isSuspiciousRegression(fresh.bundle, cached.bundle)) {
+      throw new Error("PRTS 当前同页快照完整性低于本地版本，已阻止覆盖");
+    }
+    await invoke("save_to_cache", { key, data: JSON.stringify(fresh) }).catch(() => {});
+    await refreshEngineDeps();
+    return { ...fresh, source: "live" };
+  } catch (error) {
+    if (cached) {
+      await refreshEngineDeps();
+      return { ...cached, source: "cache", warning: String(error) };
+    }
+    // Upgrade path: preserve old v1.1.x script cache when the first v3 sync is
+    // attempted offline. The shared bundle has its own last-known-good rollback.
+    const legacyKey = `stories_${title.replace(/\//g, "_")}`;
+    const legacyRaw = await invoke<string | null>("load_from_cache", { key: legacyKey }).catch(() => null);
+    if (legacyRaw) {
+      const story = JSON.parse(legacyRaw) as { script: string; title: string };
+      const bundle = await loadBundle();
+      return {
+        story,
+        bundle,
+        revision: `legacy:${await hashText(story.script)}:${bundle.revision || "unknown"}`,
+        source: "legacy-cache",
+        warning: String(error),
+      };
+    }
     throw error;
   }
 }
 
 /** Fetch+cache a story's script if needed, returning its raw scenario text. */
-export async function ensureScript(title: string): Promise<string> {
+interface ScriptRecord {
+  script: string;
+  title: string;
+  pageRevision?: string;
+  scriptHash?: string;
+}
+
+async function ensureScriptRecord(title: string, pageRevision?: string): Promise<ScriptRecord> {
   const key = `stories_${title.replace(/\//g, "_")}`;
-  const cached = await invoke<string | null>("load_from_cache", { key });
-  if (cached) return (JSON.parse(cached) as { script: string }).script;
-  const data = await invoke<{ script: string; title: string }>("fetch_story_page", {
-    pageTitle: title,
-  });
-  await invoke("save_to_cache", { key, data: JSON.stringify(data) }).catch(() => {});
-  return data.script;
+  let cached: ScriptRecord | null = null;
+  try {
+    const raw = await invoke<string | null>("load_from_cache", { key });
+    if (raw) cached = JSON.parse(raw) as ScriptRecord;
+  } catch {
+    // Continue with live fetch.
+  }
+  if (pageRevision && cached?.pageRevision === pageRevision && cached.script) {
+    cached.scriptHash ||= await hashText(cached.script);
+    return cached;
+  }
+  try {
+    const data = await invoke<{ script: string; title: string }>("fetch_story_page", { pageTitle: title });
+    const record: ScriptRecord = {
+      ...data,
+      pageRevision,
+      scriptHash: await hashText(data.script),
+    };
+    await invoke("save_to_cache", { key, data: JSON.stringify(record) }).catch(() => {});
+    return record;
+  } catch (error) {
+    if (cached?.script) {
+      cached.scriptHash ||= await hashText(cached.script);
+      return cached;
+    }
+    throw error;
+  }
+}
+
+/** Fetch+cache a story's script with revision validation. */
+export async function ensureScript(title: string, pageRevision?: string): Promise<string> {
+  return (await ensureScriptRecord(title, pageRevision)).script;
+}
+
+async function hashText(text: string): Promise<string> {
+  const bytes = new TextEncoder().encode(text);
+  if (crypto?.subtle) {
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  let hash = 2166136261;
+  for (const byte of bytes) hash = Math.imul(hash ^ byte, 16777619);
+  return (hash >>> 0).toString(16);
 }
 
 /**
@@ -109,7 +233,10 @@ export async function captureManifest(
   iframe.style.cssText = "position:fixed;left:-99999px;top:0;width:960px;height:540px;border:0;";
   document.body.appendChild(iframe);
   try {
-    const { manifest } = await bootEngineInFrame({ iframe, bundle, script, title, mode: "manifest" });
+    const { manifest, audit } = await bootEngineInFrame({ iframe, bundle, script, title, mode: "manifest" });
+    if (audit?.missing.length) {
+      throw new Error(`PRTS 同步校验失败（${title}）：${audit.missing.slice(0, 8).join("；")}`);
+    }
     return manifest ?? [];
   } finally {
     iframe.remove();
@@ -122,13 +249,46 @@ export async function captureManifest(
  * predownload. A cache hit needs no network at all — important for offline reuse
  * and for breakpoint-resume (a re-run skips already-parsed stories instantly).
  */
-export async function manifestForStory(bundle: WidgetBundle, title: string): Promise<string[]> {
+interface ManifestRecord {
+  schemaVersion: 2;
+  runtimeRevision: string;
+  pageRevision?: string;
+  scriptHash: string;
+  urls: string[];
+}
+
+export async function manifestForStory(
+  bundle: WidgetBundle,
+  title: string,
+  pageRevision?: string,
+  engineAssetsRevision?: string
+): Promise<string[]> {
   const key = `manifest_${title.replace(/\//g, "_")}`;
-  const cached = await invoke<string | null>("load_from_cache", { key });
-  if (cached) return JSON.parse(cached) as string[];
-  const script = await ensureScript(title); // may fetch (online); throws if offline+uncached
-  const urls = await captureManifest(bundle, script, title);
-  await invoke("save_to_cache", { key, data: JSON.stringify(urls) }).catch(() => {});
+  const script = await ensureScriptRecord(title, pageRevision);
+  const runtimeRevision = `${bundle.revision || "legacy"}|${engineAssetsRevision || "unknown"}`;
+  const cachedRaw = await invoke<string | null>("load_from_cache", { key }).catch(() => null);
+  if (cachedRaw) {
+    try {
+      const cached = JSON.parse(cachedRaw) as ManifestRecord;
+      if (cached.schemaVersion === 2
+        && cached.runtimeRevision === runtimeRevision
+        && cached.pageRevision === script.pageRevision
+        && cached.scriptHash === script.scriptHash
+        && cached.urls.length > 0) return cached.urls;
+    } catch {
+      // Legacy/corrupt manifest is recaptured below.
+    }
+  }
+  const urls = await captureManifest(bundle, script.script, title);
+  if (!urls.length) throw new Error(`PRTS 引擎未能为「${title}」生成任何资源清单`);
+  const record: ManifestRecord = {
+    schemaVersion: 2,
+    runtimeRevision,
+    pageRevision: script.pageRevision,
+    scriptHash: script.scriptHash || await hashText(script.script),
+    urls,
+  };
+  await invoke("save_to_cache", { key, data: JSON.stringify(record) }).catch(() => {});
   return urls;
 }
 
@@ -278,6 +438,16 @@ export async function runPredownload(
     // Cache the engine deps once up-front (via Rust) so the parallel iframe boots
     // below all load jQuery/PreloadJS/toolbox from disk instead of the network.
     await prewarmEngineDeps();
+    const engineAssetsRevision = await refreshEngineDeps();
+    const runtimeRevision = `${bundle.revision || "legacy"}|${engineAssetsRevision}`;
+    let pageRevisions: Record<string, string> = {};
+    try {
+      pageRevisions = await invoke<Record<string, string>>("fetch_page_revisions", { titles });
+    } catch (error) {
+      // Safe fallback: no old manifest is trusted; ensureScriptRecord will fetch
+      // each page fresh and only use cache if that live request fails.
+      console.warn("PRTS revision check failed; switching to per-page validation", error);
+    }
     // Open a streaming job (foreground → keep-alive start is allowed).
     const jobId = await invoke<number>("download_start", { urls: [] });
 
@@ -310,7 +480,12 @@ export async function runPredownload(
     // still need WebView engine indexing.
     let pending: string[];
     try {
-      pending = await invoke<string[]>("download_feed_cached", { jobId, titles });
+      pending = await invoke<string[]>("download_feed_cached", {
+        jobId,
+        titles,
+        runtimeRevision,
+        pageRevisions,
+      });
     } catch {
       pending = [...titles];
     }
@@ -327,7 +502,12 @@ export async function runPredownload(
     // return to the foreground.
     const indexOne = async (title: string): Promise<boolean> => {
       try {
-        const urls = (await manifestForStory(bundle, title))
+        const urls = (await manifestForStory(
+          bundle,
+          title,
+          pageRevisions[title],
+          engineAssetsRevision
+        ))
           // Only real http(s) assets are downloadable; drop data:/blob:/relative
           // URLs the engine emits so they never inflate the total or look failed.
           .filter((u) => /^https?:\/\//i.test(u));

@@ -163,7 +163,7 @@ export default function SettingsPage() {
   };
 
   const clearAllCache = async () => {
-    if (!confirm("确认清除所有缓存数据？（引擎已内置于软件包，不会被清除）")) return;
+    if (!confirm("确认清除所有缓存数据？（会清除热更新引擎与剧情资源；下次联网时自动重建，离线时使用软件内应急副本）")) return;
     try {
       await invoke("clear_cache");
       showMsg("缓存已清除");
