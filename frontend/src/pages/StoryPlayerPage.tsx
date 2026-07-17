@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
 import { bootEngineInFrame } from "../lib/engineBoot";
-import { loadBundle } from "../lib/predownload";
+import { loadStoryRuntime } from "../lib/predownload";
 import { setReading } from "../lib/keepalive";
 import { useCompression } from "../lib/CompressionContext";
 import { markRead, setLastWatched } from "../lib/readState";
@@ -15,11 +14,6 @@ import { useHidePlayerBack } from "../lib/uiSettings";
  * All CDN requests are proxied through the prts-cdn:// custom protocol (offline-first).
  */
 
-interface StoryPageData {
-  script: string;
-  title: string;
-}
-
 export default function StoryPlayerPage() {
   const { pageTitle } = useParams<{ pageTitle: string }>();
   const navigate = useNavigate();
@@ -28,6 +22,7 @@ export default function StoryPlayerPage() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("正在加载...");
   const [error, setError] = useState<string | null>(null);
+  const [syncWarning, setSyncWarning] = useState<string | null>(null);
 
   const decodedTitle = pageTitle ? decodeURIComponent(pageTitle) : "";
   const { busy: compressionBusy } = useCompression();
@@ -73,21 +68,12 @@ export default function StoryPlayerPage() {
 
     (async () => {
       try {
-        // === Step 1: Widget bundle (cached) ===
-        setStatus("正在获取引擎代码...");
-        const bundle = await loadBundle();
-        if (cancelled) return;
-
-        // === Step 2: Story script (cached) ===
-        setStatus(`正在获取剧情: ${decodedTitle}...`);
-        let storyData: StoryPageData;
-        const cacheKey = `stories_${decodedTitle.replace(/\//g, "_")}`;
-        const cachedStory = await invoke<string | null>("load_from_cache", { key: cacheKey });
-        if (cachedStory) {
-          storyData = JSON.parse(cachedStory);
-        } else {
-          storyData = await invoke<StoryPageData>("fetch_story_page", { pageTitle: decodedTitle });
-          await invoke("save_to_cache", { key: cacheKey, data: JSON.stringify(storyData) }).catch(() => {});
+        // Script + engine/data tables come from the same fresh PRTS response. If
+        // refresh fails, a validated last-known-good snapshot is retained visibly.
+        setStatus(`正在同步剧情与演出引擎: ${decodedTitle}...`);
+        const runtime = await loadStoryRuntime(decodedTitle);
+        if (runtime.source !== "live") {
+          setSyncWarning("PRTS 同步失败，当前使用上次验证成功的离线快照；建议联网后重新进入。\n" + (runtime.warning || ""));
         }
         if (cancelled) return;
 
@@ -97,14 +83,18 @@ export default function StoryPlayerPage() {
         iframe.style.cssText = "width:100%;height:100%;border:0;display:block;background:#000;";
         container.innerHTML = "";
         container.appendChild(iframe);
-        await bootEngineInFrame({
+        const boot = await bootEngineInFrame({
           iframe,
-          bundle,
-          script: storyData.script,
+          bundle: runtime.bundle,
+          script: runtime.story.script,
           title: decodedTitle,
           mode: "play",
           isCancelled: () => cancelled,
         });
+
+        if (boot.audit?.missing.length) {
+          setSyncWarning(`演出资源表校验发现 ${boot.audit.missing.length} 项缺失：\n${boot.audit.missing.slice(0, 8).join("\n")}`);
+        }
 
         setLoading(false);
       } catch (e) {
@@ -147,6 +137,13 @@ export default function StoryPlayerPage() {
     <div style={{ width: "100%", height: "100%", background: "#000", position: "relative" }}>
       {!hidePlayerBack && <button onClick={handleBack} style={backBtnStyle} aria-label="返回" title="返回">◀</button>}
 
+      {syncWarning && (
+        <div style={warningStyle} role="status">
+          {syncWarning}
+          <button onClick={() => setSyncWarning(null)} style={warningCloseStyle}>知道了</button>
+        </div>
+      )}
+
       {loading && (
         <div style={centerStyle}>
           <div style={{ color: "#929292", fontSize: "16px" }}>{status}</div>
@@ -181,6 +178,32 @@ const btnStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
+const warningStyle: React.CSSProperties = {
+  position: "fixed",
+  top: "calc(8px + var(--safe-top))",
+  left: "50%",
+  transform: "translateX(-50%)",
+  zIndex: 10000,
+  maxWidth: "min(760px, 80vw)",
+  padding: "8px 12px",
+  whiteSpace: "pre-wrap",
+  color: "#fff3cd",
+  background: "rgba(92, 67, 0, 0.94)",
+  border: "1px solid #d6a900",
+  borderRadius: "6px",
+  fontSize: "12px",
+  lineHeight: 1.4,
+};
+
+const warningCloseStyle: React.CSSProperties = {
+  marginLeft: "12px",
+  padding: "3px 8px",
+  color: "#111",
+  background: "#f4c430",
+  border: 0,
+  borderRadius: "3px",
+};
+
 // Small, unobtrusive icon-only back button in the corner (the reader is meant to
 // be immersive; the system back gesture also works).
 const backBtnStyle: React.CSSProperties = {
@@ -202,4 +225,3 @@ const backBtnStyle: React.CSSProperties = {
   fontSize: "14px",
   lineHeight: 1,
 };
-

@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering}
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager as _};
 
 /// Default number of concurrent workers per job (jsd default). Configurable at
@@ -378,12 +378,10 @@ async fn worker(job: Arc<Job>, root: Arc<std::path::PathBuf>, sink: Arc<dyn Prog
 
         // Already in the content-addressed store (store_path on the canonical key
         // is idempotent, so it matches whether the input was a URL or a bare key).
-        if let Some(p) = crate::media::store_path(&root, &key) {
-            if p.exists() {
-                job.skipped.fetch_add(1, Ordering::Relaxed);
-                finish_item(&job, &*sink);
-                continue;
-            }
+        if crate::media::read_local_validated(&root, &key).is_some() {
+            job.skipped.fetch_add(1, Ordering::Relaxed);
+            finish_item(&job, &*sink);
+            continue;
         }
 
         match fetch_item(client, &key, &root, &job).await {
@@ -458,9 +456,11 @@ async fn fetch_to_store(
             return Err("cancelled".into());
         }
     }
+    crate::media::validate_asset_bytes(key, &buf)?;
     // Real-time compression: when a tier is enabled and this is an image, store
     // the compressed (WebP) bytes directly instead of the original.
     let buf = crate::compress::maybe_transcode_image(key, buf);
+    crate::media::validate_asset_bytes(key, &buf)?;
     // Store under the canonical key, not the source-specific fetch URL.
     crate::media::write_local(root, key, &buf)
 }
@@ -555,10 +555,7 @@ pub struct DownloadSettings {
 }
 
 #[tauri::command]
-pub fn download_start(
-    urls: Vec<String>,
-    state: tauri::State<'_, Manager>,
-) -> Result<u64, String> {
+pub fn download_start(urls: Vec<String>, state: tauri::State<'_, Manager>) -> Result<u64, String> {
     // Offline gate: don't even start a bulk download when networking is off.
     crate::net::ensure_online()?;
     // Compression gate: refuse new downloads while a compression batch runs (the
@@ -587,21 +584,43 @@ pub fn download_add(job_id: u64, urls: Vec<String>, state: tauri::State<'_, Mana
 pub fn download_feed_cached(
     job_id: u64,
     titles: Vec<String>,
+    runtime_revision: String,
+    page_revisions: HashMap<String, String>,
     state: tauri::State<'_, Manager>,
 ) -> Vec<String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ManifestRecord {
+        schema_version: u8,
+        runtime_revision: String,
+        page_revision: Option<String>,
+        urls: Vec<String>,
+    }
+
     let mut uncached = Vec::new();
     for title in titles {
+        let Some(expected_page_revision) = page_revisions.get(&title) else {
+            // If the live oldid audit failed/missed this page, never trust a stale
+            // manifest blindly; the frontend will validate/fetch it directly.
+            uncached.push(title);
+            continue;
+        };
         let path = crate::commands::cache::manifest_cache_path(&title);
         match std::fs::read_to_string(&path) {
-            Ok(s) => match serde_json::from_str::<Vec<String>>(&s) {
-                Ok(urls) => {
-                    let urls: Vec<String> = urls
+            Ok(s) => match serde_json::from_str::<ManifestRecord>(&s) {
+                Ok(record)
+                    if record.schema_version == 2
+                        && record.runtime_revision == runtime_revision
+                        && record.page_revision.as_ref() == Some(expected_page_revision) =>
+                {
+                    let urls: Vec<String> = record
+                        .urls
                         .into_iter()
                         .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
                         .collect();
                     state.add(job_id, urls);
                 }
-                Err(_) => uncached.push(title), // corrupt cache → re-index
+                _ => uncached.push(title), // stale/legacy/corrupt cache → re-index
             },
             Err(_) => uncached.push(title), // not cached yet
         }
@@ -684,7 +703,12 @@ mod tests {
 
     #[test]
     fn status_u8_roundtrips() {
-        for s in [Status::Running, Status::Paused, Status::Completed, Status::Cancelled] {
+        for s in [
+            Status::Running,
+            Status::Paused,
+            Status::Completed,
+            Status::Cancelled,
+        ] {
             assert_eq!(Status::from_u8(s.to_u8()), s);
         }
     }
@@ -713,11 +737,21 @@ mod tests {
     // per process so parallel tests don't collide.
 
     fn unique_url(tag: &str, i: usize) -> String {
-        format!("https://t.invalid/{}/{}/f{}.png", std::process::id(), tag, i)
+        format!(
+            "https://t.invalid/{}/{}/f{}.png",
+            std::process::id(),
+            tag,
+            i
+        )
     }
     fn precreate(url: &str) {
         let root = crate::media::media_root(&crate::data_root::data_root());
-        crate::media::write_local(&root, url, b"x").unwrap();
+        crate::media::write_local(
+            &root,
+            url,
+            &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        )
+        .unwrap();
     }
     async fn wait_terminal(m: &Manager, id: u64) -> Snapshot {
         for _ in 0..200 {
@@ -772,7 +806,12 @@ mod tests {
         for k in &keys {
             // Precreate via the https URL form; canonical_key collapses both forms.
             let root = crate::media::media_root(&crate::data_root::data_root());
-            crate::media::write_local(&root, &format!("https://{k}"), b"x").unwrap();
+            crate::media::write_local(
+                &root,
+                &format!("https://{k}"),
+                &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+            )
+            .unwrap();
         }
         let m = Manager::new(Arc::new(NoopSink));
         let id = m.start(keys);

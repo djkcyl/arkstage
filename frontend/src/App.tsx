@@ -10,7 +10,7 @@ import DebugConsole from "./components/DebugConsole";
 import DownloadBar from "./components/DownloadBar";
 import { DownloadProvider } from "./lib/DownloadContext";
 import { CompressionProvider } from "./lib/CompressionContext";
-import { applyPersistedDownloadSettings } from "./lib/predownload";
+import { applyPersistedDownloadSettings, loadBundle } from "./lib/predownload";
 import { startKeepalive } from "./lib/keepalive";
 import { BookshelfMetadataProvider } from "./lib/BookshelfMetadataContext";
 
@@ -19,6 +19,9 @@ export default function App() {
   // on startup (the backend keeps them in memory only).
   useEffect(() => {
     applyPersistedDownloadSettings();
+    // Start the validated ScenarioSimulator/data-table hot update immediately;
+    // playback still has an exact-page fresh-first check before it boots.
+    void loadBundle().catch((error) => console.warn("PRTS engine startup sync failed", error));
     // Android: set the keep-alive notification to its idle text. The foreground
     // service itself is started natively at launch (MainActivity); this just gives
     // it content. No-op on desktop.

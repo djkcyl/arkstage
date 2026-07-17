@@ -33,6 +33,17 @@ pub struct StoryPageData {
     pub title: String,
 }
 
+/// A story script and the ScenarioSimulator snapshot extracted from the SAME
+/// rendered PRTS response. Keeping them atomic prevents a newly edited story
+/// from being paired with an older global character/background table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoryRuntimeData {
+    pub story: StoryPageData,
+    pub bundle: WidgetBundleData,
+    /// SHA-256 of script + widget snapshot. Used to invalidate manifests.
+    pub revision: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheStatus {
     pub story_index_cached: bool,
@@ -47,4 +58,18 @@ pub struct WidgetBundleData {
     pub dom_html: String,
     pub data_blocks_html: String,
     pub engine_scripts: Vec<String>,
+    /// Content revision, independent of the source page's MediaWiki oldid.
+    #[serde(default)]
+    pub revision: String,
+    #[serde(default)]
+    pub diagnostics: WidgetDiagnostics,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WidgetDiagnostics {
+    pub data_block_ids: Vec<String>,
+    pub background_entries: usize,
+    pub character_entries: usize,
+    pub link_groups: usize,
+    pub engine_script_count: usize,
 }

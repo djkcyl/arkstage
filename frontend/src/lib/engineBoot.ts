@@ -20,6 +20,14 @@ export interface WidgetBundle {
   dom_html: string;
   data_blocks_html: string;
   engine_scripts: string[];
+  revision?: string;
+  diagnostics?: {
+    data_block_ids: string[];
+    background_entries: number;
+    character_entries: number;
+    link_groups: number;
+    engine_script_count: number;
+  };
 }
 
 export interface FrameBootOptions {
@@ -38,16 +46,16 @@ export interface FrameBootOptions {
 export interface FrameBootResult {
   /** In "manifest" mode: the deduped original asset URLs from fun_sys_preload. */
   manifest?: string[];
+  audit?: ScenarioAudit;
 }
 
-// External engine resources: remote URL + local cache filename. A `bundled` path
-// (relative to the app origin) means a copy ships INSIDE the app and is used
-// directly — see EXTERNALS.jquery.
-// The whole engine ("dead code": jQuery/PreloadJS/toolbox JS + the scenario CSS +
-// NotoSans font) ships INSIDE the app under frontend/public/vendor, so the player
-// always works offline, needs no "预缓存引擎" step, and survives 清除所有缓存 (the
-// cache only holds downloadable story media + index). `bundled` is a path relative
-// to the app origin used directly — no network, no cache.
+export interface ScenarioAudit {
+  referenced: number;
+  missing: string[];
+}
+
+// Engine dependencies are refreshed once per app lifecycle. Validated disk cache
+// is the offline rollback; bundled files are the final disaster-recovery copy.
 export const EXTERNALS = {
   css: { url: "https://static.prts.wiki/assets/scenario/arknights-scenario.css", filename: "arknights-scenario.css", bundled: "vendor/arknights-scenario.css" },
   jquery: { url: "https://code.jquery.com/jquery-3.7.1.min.js", filename: "jquery.min.js", bundled: "vendor/jquery.min.js" },
@@ -63,12 +71,44 @@ function bundledUrl(rel: string): string {
 
 // Count of engine script blocks in the last boot (for the diagnostic probe).
 let bundleScriptCount = 0;
+let engineRefreshPromise: Promise<string> | null = null;
+
+interface AssetSnapshot {
+  path: string;
+  sha256: string;
+  fresh: boolean;
+  warning?: string | null;
+}
+
+/** Fresh-first hot update for all executable/style engine dependencies. */
+export function refreshEngineDeps(): Promise<string> {
+  if (!engineRefreshPromise) {
+    const deps = [EXTERNALS.css, EXTERNALS.jquery, EXTERNALS.preloadjs, EXTERNALS.toolbox];
+    engineRefreshPromise = Promise.all(deps.map(async (dep) => {
+      try {
+        const snapshot = await invoke<AssetSnapshot>("refresh_engine_asset", {
+          url: dep.url,
+          filename: dep.filename,
+        });
+        if (!snapshot.fresh && snapshot.warning) {
+          pushLog("warn", `[engine-update] ${dep.filename}: ${snapshot.warning}`);
+        }
+        return `${dep.filename}:${snapshot.sha256}`;
+      } catch (error) {
+        pushLog("warn", `[engine-update] ${dep.filename}: using bundled fallback`, error);
+        return `${dep.filename}:bundled`;
+      }
+    })).then((parts) => parts.join("|"));
+  }
+  return engineRefreshPromise;
+}
 
 export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBootResult> {
   const { iframe, bundle, script, title, mode } = opts;
   const isCancelled = opts.isCancelled ?? (() => false);
   const play = mode === "play";
   bundleScriptCount = bundle.engine_scripts.length;
+  await refreshEngineDeps();
 
   const idoc = iframe.contentDocument;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -108,6 +148,12 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   // groups, so charLink("avg_x#1$2") aborts before the image URL is even looked up.
   // Recover missing groups from datas_char itself; existing precise layouts win.
   repairScenarioLinks(idoc, scenarioLinkOverrides());
+  const audit = auditScenarioReferences(idoc, script);
+  if (audit.missing.length) {
+    pushLog("error", `[sync-audit] ${title}: ${audit.missing.join("; ")}`);
+  } else {
+    pushLog("info", `[sync-audit] ${title}: ${audit.referenced} references resolved`);
+  }
 
   // Capture engine-side errors (uncaught script errors, failed asset loads, console)
   // BEFORE any engine script runs, so the real cause of a stuck boot is visible.
@@ -140,7 +186,7 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   }
 
   if (mode === "manifest") {
-    return { manifest: capturePreloadManifest(iwin) };
+    return { manifest: capturePreloadManifest(iwin), audit };
   }
 
   // === Play: run jQuery ready (fun_sys_preload + event wiring) and window.onload ===
@@ -153,7 +199,66 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   // real browser fullscreen, leaving black margins in our windowed webview).
   installWindowedFit(iwin, idoc);
   reportBootHealth(iwin);
-  return {};
+  return { audit };
+}
+
+/** Static mirror of the engine's preload key resolution. This catches a script /
+ * global-table mismatch before the user reaches a blank CG or character frame. */
+export function auditScenarioReferences(doc: Document, script: string): ScenarioAudit {
+  const csvKeys = (id: string) => new Set(
+    (doc.getElementById(id)?.textContent || "")
+      .split("\n")
+      .map((line) => line.split(",", 1)[0]?.trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const backgrounds = csvKeys("datas_back");
+  const characters = csvKeys("datas_char");
+  let links: Record<string, ScenarioLink> = {};
+  try { links = JSON.parse(doc.getElementById("datas_link")?.textContent || "{}"); } catch { /* reported below */ }
+
+  const missing = new Set<string>();
+  let referenced = 0;
+  const command = /^\s*\[\s*(background|image|showitem|gridbg|verticalbg|largebg|largeimg|character|charactercutin|charslot)\s*(?:\((.*?)\))?\s*\]/gim;
+  for (const match of script.matchAll(command)) {
+    const type = match[1].toLowerCase();
+    const args: Record<string, string> = {};
+    const params = match[2] || "";
+    const param = /([a-zA-Z][\w]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^,\s)]+))/g;
+    for (const p of params.matchAll(param)) args[p[1].toLowerCase()] = p[2] ?? p[3] ?? p[4] ?? "";
+
+    if (["background", "image", "showitem"].includes(type) && args.image) {
+      const key = `${type === "background" ? "bg_" : ""}${args.image.toLowerCase()}`;
+      referenced++;
+      if (!backgrounds.has(key)) missing.add(`<${type}> ${key}`);
+    }
+    if (["gridbg", "verticalbg", "largebg", "largeimg"].includes(type) && args.imagegroup) {
+      for (const image of args.imagegroup.split("/").filter(Boolean)) {
+        const key = `${type.endsWith("bg") ? "bg_" : ""}${image.toLowerCase()}`;
+        referenced++;
+        if (!backgrounds.has(key)) missing.add(`<${type}> ${key}`);
+      }
+    }
+    if (["character", "charactercutin", "charslot"].includes(type)) {
+      const names = [args.name, type === "character" ? args.name2 : undefined].filter(Boolean) as string[];
+      for (const raw of names) {
+        referenced++;
+        const parsed = raw.trim().toLowerCase().match(/^([^@#$]+)(?:[@#$]([a-z\d]+)|#(\d+)\$(\d+))?/);
+        const base = parsed?.[1];
+        if (!base || !links[base]) { missing.add(`<${type}> ${base || raw}`); continue; }
+        const group = parsed?.[4];
+        if (group && !links[base].array.some((entry) => entry.name.toLowerCase().endsWith(`$${group}`))) {
+          missing.add(`<${type}> ${base} group $${group}`);
+          continue;
+        }
+        // Every link entry must resolve to the character URL table. Checking all
+        // entries also validates automatically repaired link groups.
+        if (!links[base].array.some((entry) => characters.has(entry.name.toLowerCase()))) {
+          missing.add(`<${type}> ${base} image table`);
+        }
+      }
+    }
+  }
+  return { referenced, missing: Array.from(missing) };
 }
 
 interface ScenarioLink {
@@ -389,15 +494,7 @@ function buildShimCode(): string {
  */
 async function loadCssInDoc(idoc: Document, localFontUrl: string): Promise<void> {
   let cssText: string | null = null;
-  // Bundled-in-app copy first (no network, no cache).
-  if (EXTERNALS.css.bundled) {
-    try {
-      const r = await fetch(bundledUrl(EXTERNALS.css.bundled));
-      if (r.ok) cssText = await r.text();
-    } catch {
-      // fall through
-    }
-  }
+  // Validated hot-updated cache first.
   if (!cssText) {
     try {
       cssText = await invoke<string | null>("read_asset_text", {
@@ -406,6 +503,15 @@ async function loadCssInDoc(idoc: Document, localFontUrl: string): Promise<void>
       });
     } catch {
       // fall through to proxy fetch
+    }
+  }
+  // Final offline fallback shipped with the app.
+  if (!cssText && EXTERNALS.css.bundled) {
+    try {
+      const r = await fetch(bundledUrl(EXTERNALS.css.bundled));
+      if (r.ok) cssText = await r.text();
+    } catch {
+      // fall through
     }
   }
   if (!cssText) {
@@ -468,11 +574,7 @@ async function ensureFontCached(): Promise<string> {
  * disk on every subsequent iframe boot (a big speed-up for the parallel indexing).
  */
 export async function resolveAssetUrl(ext: { url: string; filename: string; bundled?: string }): Promise<string> {
-  // A copy shipped inside the app wins outright — no network, no cache, works
-  // offline, and immune to a blocked/slow CDN (this is how jQuery loads).
-  if (ext.bundled) {
-    return new URL(ext.bundled, `${window.location.origin}/`).href;
-  }
+  // The startup refresh already validated this file; prefer it over the package.
   try {
     const localPath = await invoke<string | null>("get_asset_path", {
       category: "engine",
@@ -482,6 +584,8 @@ export async function resolveAssetUrl(ext: { url: string; filename: string; bund
   } catch {
     // fall through to download
   }
+  // Final disaster-recovery copy when online refresh and disk rollback both fail.
+  if (ext.bundled) return bundledUrl(ext.bundled);
   try {
     const localPath = await invoke<string>("download_asset", {
       url: ext.url,
@@ -502,11 +606,7 @@ export async function resolveAssetUrl(ext: { url: string; filename: string; bund
  * disk instead of each racing to download the same files over the network.
  */
 export async function prewarmEngineDeps(): Promise<void> {
-  await Promise.all(
-    [EXTERNALS.jquery, EXTERNALS.preloadjs, EXTERNALS.toolbox].map((d) =>
-      resolveAssetUrl(d).catch(() => undefined)
-    )
-  );
+  await refreshEngineDeps();
 }
 
 /** Append a <script src> to a document and resolve when it loads. */

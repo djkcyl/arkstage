@@ -8,6 +8,7 @@
     "build": "tsc -b frontend && vite build frontend",
     "lint": "eslint -c frontend/eslint.config.js frontend",
     "test:metadata": "tsc frontend/src/lib/bookshelfMetadata.ts --target ES2023 --module ESNext --lib ES2023,DOM --skipLibCheck --outDir build/test && node --test frontend/src/lib/bookshelfMetadata.test.mjs",
+    "verify:prts-sync": "node scripts/verify-prts-sync.mjs",
     "preview": "vite preview frontend",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

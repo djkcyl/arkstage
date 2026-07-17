@@ -23,14 +23,12 @@ fn all_cache_roots() -> Vec<PathBuf> {
 
 /// Save JSON data to a cache file.
 #[tauri::command]
-pub async fn save_to_cache(
-    key: String,
-    data: String,
-) -> Result<(), String> {
+pub async fn save_to_cache(key: String, data: String) -> Result<(), String> {
     let dir = cache_dir()?;
     // Sanitize key for filesystem
     let filename = sanitize_filename(&key);
     let path = dir.join(format!("{}.json", filename));
+    recover_previous(&path);
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
@@ -38,20 +36,46 @@ pub async fn save_to_cache(
             .map_err(|e| format!("Failed to create directory: {}", e))?;
     }
 
-    std::fs::write(&path, &data)
+    atomic_replace(&path, data.as_bytes())
         .map_err(|e| format!("Failed to write cache file: {}", e))?;
 
     Ok(())
 }
 
+fn recover_previous(path: &Path) {
+    let backup = path.with_extension("previous");
+    if !path.exists() && backup.exists() {
+        let _ = std::fs::rename(backup, path);
+    }
+}
+
+fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let tmp = path.with_extension(format!("new-{}", std::process::id()));
+    let backup = path.with_extension("previous");
+    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&backup);
+    let had_old = path.exists();
+    if had_old {
+        std::fs::rename(path, &backup).map_err(|e| e.to_string())?;
+    }
+    if let Err(error) = std::fs::rename(&tmp, path) {
+        if had_old {
+            let _ = std::fs::rename(&backup, path);
+        }
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error.to_string());
+    }
+    let _ = std::fs::remove_file(backup);
+    Ok(())
+}
+
 /// Load cached data by key.
 #[tauri::command]
-pub async fn load_from_cache(
-    key: String,
-) -> Result<Option<String>, String> {
+pub async fn load_from_cache(key: String) -> Result<Option<String>, String> {
     let dir = cache_dir()?;
     let filename = sanitize_filename(&key);
     let path = dir.join(format!("{}.json", filename));
+    recover_previous(&path);
 
     if path.exists() {
         let data = std::fs::read_to_string(&path)
@@ -64,16 +88,13 @@ pub async fn load_from_cache(
 
 /// Delete a cached item by key.
 #[tauri::command]
-pub async fn delete_from_cache(
-    key: String,
-) -> Result<(), String> {
+pub async fn delete_from_cache(key: String) -> Result<(), String> {
     let dir = cache_dir()?;
     let filename = sanitize_filename(&key);
     let path = dir.join(format!("{}.json", filename));
 
     if path.exists() {
-        std::fs::remove_file(&path)
-            .map_err(|e| format!("Failed to delete cache file: {}", e))?;
+        std::fs::remove_file(&path).map_err(|e| format!("Failed to delete cache file: {}", e))?;
     }
     Ok(())
 }
@@ -154,7 +175,10 @@ pub struct DeleteResult {
 /// (manifest + script).
 #[tauri::command]
 pub async fn delete_chapter_cache(titles: Vec<String>) -> Result<DeleteResult, String> {
-    Ok(delete_chapter_cache_in(&crate::data_root::data_root(), &titles))
+    Ok(delete_chapter_cache_in(
+        &crate::data_root::data_root(),
+        &titles,
+    ))
 }
 
 /// Core of [`delete_chapter_cache`], parameterized on the data root for testing.
@@ -177,9 +201,17 @@ fn delete_chapter_cache_in(root: &Path, titles: &[String]) -> DeleteResult {
             if !(name.starts_with("manifest_") && name.ends_with(".json")) {
                 continue;
             }
-            let Ok(s) = std::fs::read_to_string(entry.path()) else { continue };
-            let Ok(urls) = serde_json::from_str::<Vec<String>>(&s) else { continue };
-            let target = if del_keys.contains(&name) { &mut del_urls } else { &mut keep_urls };
+            let Ok(s) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            let Some(urls) = parse_manifest_urls(&s) else {
+                continue;
+            };
+            let target = if del_keys.contains(&name) {
+                &mut del_urls
+            } else {
+                &mut keep_urls
+            };
             target.extend(urls);
         }
     }
@@ -202,11 +234,11 @@ fn delete_chapter_cache_in(root: &Path, titles: &[String]) -> DeleteResult {
         }
     }
 
-    // Remove the per-story cache files (manifest + script) for the deleted stories.
+    // Remove the per-story cache files (manifest + script + atomic runtime snapshot).
     let mut stories_cleared: u64 = 0;
     for t in titles {
         let mut any = false;
-        for f in [manifest_filename(t), story_filename(t)] {
+        for f in [manifest_filename(t), story_filename(t), runtime_filename(t)] {
             let path = cache.join(f);
             if let Ok(meta) = std::fs::metadata(&path) {
                 freed += meta.len();
@@ -221,7 +253,26 @@ fn delete_chapter_cache_in(root: &Path, titles: &[String]) -> DeleteResult {
         }
     }
 
-    DeleteResult { freed_bytes: freed, deleted_files, stories_cleared }
+    DeleteResult {
+        freed_bytes: freed,
+        deleted_files,
+        stories_cleared,
+    }
+}
+
+fn parse_manifest_urls(s: &str) -> Option<Vec<String>> {
+    if let Ok(urls) = serde_json::from_str::<Vec<String>>(s) {
+        return Some(urls);
+    }
+    serde_json::from_str::<serde_json::Value>(s)
+        .ok()?
+        .get("urls")?
+        .as_array()
+        .map(|urls| {
+            urls.iter()
+                .filter_map(|u| u.as_str().map(str::to_string))
+                .collect()
+        })
 }
 
 fn dir_size(path: &PathBuf) -> u64 {
@@ -263,6 +314,12 @@ fn manifest_filename(title: &str) -> String {
 }
 fn story_filename(title: &str) -> String {
     format!("{}.json", sanitize_filename(&format!("stories_{title}")))
+}
+fn runtime_filename(title: &str) -> String {
+    format!(
+        "{}.json",
+        sanitize_filename(&format!("story-runtime-v3_{title}"))
+    )
 }
 
 fn sanitize_filename(s: &str) -> String {
@@ -314,9 +371,17 @@ mod tests {
         for u in [shared, only_a, only_b] {
             crate::media::write_local(&media, u, b"x").unwrap();
         }
-        fs::write(cache.join(manifest_filename("Ch/A")), serde_json::to_string(&[shared, only_a]).unwrap()).unwrap();
+        fs::write(
+            cache.join(manifest_filename("Ch/A")),
+            serde_json::to_string(&[shared, only_a]).unwrap(),
+        )
+        .unwrap();
         fs::write(cache.join(story_filename("Ch/A")), "{}").unwrap();
-        fs::write(cache.join(manifest_filename("Ch/B")), serde_json::to_string(&[shared, only_b]).unwrap()).unwrap();
+        fs::write(
+            cache.join(manifest_filename("Ch/B")),
+            serde_json::to_string(&[shared, only_b]).unwrap(),
+        )
+        .unwrap();
         fs::write(cache.join(story_filename("Ch/B")), "{}").unwrap();
 
         let r = delete_chapter_cache_in(&root, &["Ch/A".to_string()]);
@@ -333,5 +398,14 @@ mod tests {
         assert_eq!(r.deleted_files, 3);
         assert_eq!(r.stories_cleared, 1);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parses_versioned_manifest_urls() {
+        let json = r#"{"schemaVersion":2,"urls":["https://media.prts.wiki/a/a.png"]}"#;
+        assert_eq!(
+            parse_manifest_urls(json).unwrap(),
+            vec!["https://media.prts.wiki/a/a.png"]
+        );
     }
 }

@@ -14,7 +14,8 @@ resources@GitHub ─jsDelivr/GitHub Raw─▶ 书架元数据/封面    图片�
 - **Rust 后端**抓取并解析剧情目录与剧本，管理缓存，并提供自定义 `prts-cdn://` 协议：命中本地的内容寻址仓库（`$APPDATA/media/{host}/{path}`）即离线返回，未命中时（且允许联网）带正确 Referer 拉取并落盘。
 - **前端**在隔离的 `<iframe>` realm 中启动原版引擎（每个剧情独立 realm，避免引擎顶层 `const` 冲突），并复用引擎自身的 `fun_sys_preload()` 精确枚举某剧情所需资源用于预下载。
 - **书架资源**不进入安装包：`BookshelfMetadataContext` 先读 `cache/bookshelf-metadata.json`，每次启动再以 `cache: no-store` 刷新 jsDelivr；网络或格式失败则自动改走 `raw.githubusercontent.com`。只有通过完整校验的响应才会覆盖内存和缓存；双线路都失败时保留旧缓存并显示可重试提示。封面/横幅同样在首选源加载失败后切换另一源，使用哈希文件名并经 `prts-cdn://` 懒加载到内容寻址缓存，因此离线可复用，更新分类或封面无需发版。
-- **PRTS 全局演出表**每次应用生命周期优先拉取最新版本，失败才回退 `widget-bundle-v2` 缓存。引擎启动前会从 `datas_char` 为 `datas_link` 尚未收录的新角色补齐缺失分组；已有的精确位置/尺寸映射始终优先，也可由资源分支的 `scenarioLinks` 下发位置覆盖。
+- **PRTS 演出运行时**使用同页原子快照：播放时从同一个响应提取剧情脚本、全部 `datas_*` 表和内联引擎，SHA-256 版本校验后写入 `story-runtime-v3`；外部 JS/CSS 每次应用生命周期热更新，完整性失败保留 last-known-good。引擎启动前会从 `datas_char` 为 `datas_link` 尚未收录的新角色补齐缺失分组，并静态审计立绘/背景/CG 引用。
+- **预下载同步校验**先批量查询 MediaWiki oldid；只有页面 oldid、全局表哈希和外部引擎哈希全部匹配的 v2 manifest 才会复用。媒体下载与协议缓存会校验文件魔数并原子写入，HTML 错误页、空文件和中断文件会被删除后重新拉取。
 
 更详细的设计见 [`docs/superpowers/specs`](superpowers/specs) 与 [`docs/superpowers/plans`](superpowers/plans)；架构约定见仓库根 [`CLAUDE.md`](../CLAUDE.md)。
 
