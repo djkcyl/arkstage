@@ -10,9 +10,16 @@
  * sprite/CG bug. CI can pass any future chapter's page titles without code changes.
  */
 const DEFAULT_PAGES = [
-  "BD-ST1 土壤病/NBT", "BD-ST2 退行性猎犬病/NBT", "BD-ST3 香蕉出血热/NBT",
-  "BD-ST4 专性寄生/NBT", "BD-ST5 热病与城/NBT", "BD-ST6 大流行/NBT",
-  "BD-ST7 漫游症/NBT",
+  "TO-ST-1_一封想写的信/NBT",
+  "TO-1_收信地：终点/BEG", "TO-1_收信地：终点/END",
+  "TO-2_记新友的混乱/BEG", "TO-3_露营奇“叽”/END",
+  "TO-4_谷里升起太阳/BEG", "TO-4_谷里升起太阳/END",
+  "TO-5_勇敢的短耳朵/BEG", "TO-5_勇敢的短耳朵/END",
+  "TO-6_最难坦诚/BEG", "TO-6_最难坦诚/END", "TO-ST-2_糖纸星星/NBT",
+  "TO-7_谎言的重量/BEG", "TO-7_谎言的重量/END",
+  "TO-8_以决心做邮戳/BEG", "TO-8_以决心做邮戳/END",
+  "TO-9_绘我们的黎明/BEG", "TO-9_绘我们的黎明/END",
+  "TO-ST-3_祝好_终途的我/NBT",
 ];
 const pages = process.argv.slice(2).length ? process.argv.slice(2) : DEFAULT_PAGES;
 const decode = (s) => s.replaceAll("&quot;", '"').replaceAll("&#39;", "'")
@@ -56,7 +63,8 @@ for (const page of pages) {
   const html = await (await fetchRetry(pageUrl)).text();
   const required = ["datas_txt", "datas_back", "datas_char", "datas_audio", "datas_link"];
   for (const id of required) pre(html, id);
-  const script = pre(html, "datas_txt");
+  // Mirror the client's compatibility repair for PRTS typos such as `#3 $1`.
+  const script = pre(html, "datas_txt").replace(/(#\d+)\s+(\$\d+)/g, "$1$2");
   const backgrounds = csv(pre(html, "datas_back"));
   const characters = csv(pre(html, "datas_char"));
   const links = JSON.parse(pre(html, "datas_link"));

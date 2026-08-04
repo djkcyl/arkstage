@@ -117,7 +117,12 @@ fn extract_inline_scripts(html: &str) -> Vec<String> {
     let selector = Selector::parse("script.navigation-not-searchable").unwrap();
     document
         .select(&selector)
-        .map(|el| el.inner_html().trim().to_string())
+        // Script elements are parsed in HTML's raw-text state.  Serialising their
+        // children with `inner_html()` escapes JavaScript operators (`&&` becomes
+        // `&amp;&amp;`, `=>` becomes `=&gt;`), producing invalid source in the
+        // WebView.  Read the text node itself so the engine code remains byte-for-
+        // byte executable while retaining structural tag/class matching.
+        .map(|el| el.text().collect::<String>().trim().to_string())
         .filter(|script| !script.is_empty())
         .collect()
 }
@@ -146,12 +151,19 @@ mod tests {
           <div id="sys_fullscreen"><div id="sys_main"></div></div><div id="sys_audio"></div>
           <pre id="datas_txt">hello</pre><pre id="datas_char">c,u</pre>
           <pre id="datas_future">future</pre>
-          <script type="text/javascript" class="x navigation-not-searchable y">window.future = true;</script>
+          <script type="text/javascript" class="x navigation-not-searchable y">
+            if (window.future && (() => 1 < 2)()) window.future = true;
+          </script>
         "#;
         let bundle = extract_widget_html(html);
         assert!(bundle.data_block_ids.contains(&"datas_future".to_string()));
         assert!(bundle.data_blocks_html.contains("id=\"datas_future\""));
-        assert_eq!(bundle.engine_scripts, vec!["window.future = true;"]);
+        assert_eq!(
+            bundle.engine_scripts,
+            vec!["if (window.future && (() => 1 < 2)()) window.future = true;"]
+        );
+        assert!(!bundle.engine_scripts[0].contains("&amp;"));
+        assert!(!bundle.engine_scripts[0].contains("&gt;"));
     }
 
     /// Optional maintainer/CI hook for a freshly downloaded rendered PRTS page:
@@ -177,6 +189,14 @@ mod tests {
         }
         assert!(bundle.dom_html.contains("sys_main"));
         assert!(bundle.engine_scripts.len() >= 3);
+        assert!(
+            bundle.engine_scripts.iter().all(|script| {
+                !script.contains("&amp;&amp;")
+                    && !script.contains("=&gt;")
+                    && !script.contains("&lt;")
+            }),
+            "engine scripts contain HTML-escaped JavaScript operators"
+        );
         assert!(bundle.background_entries > 100);
         assert!(bundle.character_entries > 100);
         assert!(bundle.link_groups.unwrap_or_default() > 50);

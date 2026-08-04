@@ -25,6 +25,15 @@ function fmt(a: unknown): string {
   if (a instanceof Error) return a.stack || `${a.name}: ${a.message}`;
   if (typeof a === "string") return a;
   if (typeof a === "object" && a !== null) {
+    // Errors created in the isolated engine iframe belong to another JS realm,
+    // so `instanceof Error` is false in the parent window.  JSON.stringify also
+    // drops Error's non-enumerable fields, reducing the only useful diagnostic to
+    // `{}`.  Read the standard error-shaped fields explicitly before JSON.
+    const errorLike = a as { name?: unknown; message?: unknown; stack?: unknown };
+    if (typeof errorLike.stack === "string" && errorLike.stack) return errorLike.stack;
+    if (typeof errorLike.message === "string" && errorLike.message) {
+      return `${typeof errorLike.name === "string" ? `${errorLike.name}: ` : ""}${errorLike.message}`;
+    }
     try {
       return JSON.stringify(a);
     } catch {
@@ -96,7 +105,10 @@ export function captureIframe(iwin: any): void {
         if (["IMG", "AUDIO", "VIDEO", "SOURCE", "SCRIPT", "LINK"].includes(tag)) {
           pushLog("error", "[engine] resource load failed:", t?.src || t?.href || tag);
         } else if (e.error) {
-          pushLog("error", "[engine]", e.error);
+          const location = e.filename
+            ? `@ ${e.filename}:${e.lineno}:${e.colno}`
+            : "";
+          pushLog("error", "[engine]", e.error, location);
         } else if (e.message) {
           pushLog("error", `[engine] ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`);
         }

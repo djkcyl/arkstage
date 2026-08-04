@@ -13,6 +13,7 @@ import { CompressionProvider } from "./lib/CompressionContext";
 import { applyPersistedDownloadSettings, loadBundle } from "./lib/predownload";
 import { startKeepalive } from "./lib/keepalive";
 import { BookshelfMetadataProvider } from "./lib/BookshelfMetadataContext";
+import ManifestProbePage from "./pages/ManifestProbePage";
 
 export default function App() {
   // Re-apply the user's saved concurrency / bandwidth limit to the backend once
@@ -27,6 +28,13 @@ export default function App() {
     // it content. No-op on desktop.
     startKeepalive();
   }, []);
+
+  const manifestProbeTitles = import.meta.env.DEV
+    ? new URLSearchParams(window.location.search).getAll("manifestProbe")
+    : [];
+  if (manifestProbeTitles.length > 0) {
+    return <ManifestProbePage titles={manifestProbeTitles} />;
+  }
 
   return (
     <BrowserRouter>

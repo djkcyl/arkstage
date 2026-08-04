@@ -78,9 +78,17 @@ export function loadBundle(): Promise<WidgetBundle> {
 async function refreshBundle(): Promise<WidgetBundle> {
   let cached: WidgetBundle | null = null;
   try {
-    const raw = await invoke<string | null>("load_from_cache", { key: "widget-bundle-v3" })
-      || await invoke<string | null>("load_from_cache", { key: "widget-bundle-v2" });
-    if (raw) cached = JSON.parse(raw) as WidgetBundle;
+    for (const key of ["widget-bundle-v4", "widget-bundle-v3", "widget-bundle-v2"]) {
+      const raw = await invoke<string | null>("load_from_cache", { key });
+      if (!raw) continue;
+      const candidate = JSON.parse(raw) as WidgetBundle;
+      // v3 briefly serialised script raw-text through innerHTML, corrupting JS
+      // operators into HTML entities. Never use such a bundle as offline rollback.
+      if (!candidate.engine_scripts.some((script) => /&(?:amp|gt|lt|quot);/.test(script))) {
+        cached = candidate;
+        break;
+      }
+    }
   } catch {
     // Continue with the live request.
   }
@@ -90,7 +98,7 @@ async function refreshBundle(): Promise<WidgetBundle> {
       throw new Error("PRTS 全局资源表数量异常回退，已拒绝覆盖本地可用版本");
     }
     await invoke("save_to_cache", {
-      key: "widget-bundle-v3",
+      key: "widget-bundle-v4",
       data: JSON.stringify(fresh),
     }).catch(() => {});
     await refreshEngineDeps();
@@ -125,7 +133,7 @@ export function loadStoryRuntime(title: string): Promise<StoryRuntime> {
 }
 
 async function refreshStoryRuntime(title: string): Promise<StoryRuntime> {
-  const key = `story-runtime-v3_${title.replace(/\//g, "_")}`;
+  const key = `story-runtime-v4_${title.replace(/\//g, "_")}`;
   let cached: RawStoryRuntime | null = null;
   try {
     const raw = await invoke<string | null>("load_from_cache", { key });

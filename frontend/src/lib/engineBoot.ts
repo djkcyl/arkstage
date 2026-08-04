@@ -120,9 +120,13 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   iwin.mw = { config: { get: (k: string) => (k === "wgUserName" ? nickname : null) } };
 
   // === Build the engine document ===
+  const normalizedScript = normalizeScenarioScript(script);
+  if (normalizedScript !== script) {
+    pushLog("info", `[engine] normalized malformed character group spacing in ${title}`);
+  }
   let dataBlocksHtml = bundle.data_blocks_html.replace(
     /<pre class="hidden" id="datas_txt">[\s\S]*?<\/pre>/,
-    `<pre class="hidden" id="datas_txt">${escapeHtml(script)}</pre>`
+    `<pre class="hidden" id="datas_txt">${escapeHtml(normalizedScript)}</pre>`
   );
   // manifest mode keeps RAW CDN URLs so captured assets are original https URLs.
   const domHtml = play ? rewriteAllCdnUrls(bundle.dom_html) : bundle.dom_html;
@@ -148,7 +152,7 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   // groups, so charLink("avg_x#1$2") aborts before the image URL is even looked up.
   // Recover missing groups from datas_char itself; existing precise layouts win.
   repairScenarioLinks(idoc, scenarioLinkOverrides());
-  const audit = auditScenarioReferences(idoc, script);
+  const audit = auditScenarioReferences(idoc, normalizedScript);
   if (audit.missing.length) {
     pushLog("error", `[sync-audit] ${title}: ${audit.missing.join("; ")}`);
   } else {
@@ -180,12 +184,18 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   // Run as Blob-URL <script src> (not inline). On WebView2 the engine's inline
   // scripts silently did not execute (window.system/onload stayed undefined);
   // a blob: script is exempt from 'unsafe-inline' and executes reliably.
-  for (const code of bundle.engine_scripts) {
+  for (const [index, code] of bundle.engine_scripts.entries()) {
     if (isCancelled()) return {};
-    await runScriptCode(idoc, iwin, play ? rewriteAllCdnUrls(code) : code);
+    await runScriptCode(
+      idoc,
+      iwin,
+      play ? rewriteAllCdnUrls(code) : code,
+      `prts-engine-${index + 1}.js`
+    );
   }
 
   if (mode === "manifest") {
+    reportBootHealth(iwin);
     return { manifest: capturePreloadManifest(iwin), audit };
   }
 
@@ -242,7 +252,7 @@ export function auditScenarioReferences(doc: Document, script: string): Scenario
       const names = [args.name, type === "character" ? args.name2 : undefined].filter(Boolean) as string[];
       for (const raw of names) {
         referenced++;
-        const parsed = raw.trim().toLowerCase().match(/^([^@#$]+)(?:[@#$]([a-z\d]+)|#(\d+)\$(\d+))?/);
+        const parsed = raw.trim().toLowerCase().match(/^([^@#$]+)(?:[@#$]([a-z\d]+)|#(\d+)\$(\d+))?$/);
         const base = parsed?.[1];
         if (!base || !links[base]) { missing.add(`<${type}> ${base || raw}`); continue; }
         const group = parsed?.[4];
@@ -259,6 +269,16 @@ export function auditScenarioReferences(doc: Document, script: string): Scenario
     }
   }
   return { referenced, missing: Array.from(missing) };
+}
+
+/**
+ * PRTS occasionally publishes a grouped character key with whitespace between
+ * its expression and group (`#3 $1`). The upstream engine only accepts `#3$1`
+ * and otherwise skips the frame and its preload asset. This narrow repair keeps
+ * the character-key grammar intact without rewriting general text.
+ */
+export function normalizeScenarioScript(script: string): string {
+  return script.replace(/(#\d+)\s+(\$\d+)/g, "$1$2");
 }
 
 interface ScenarioLink {
@@ -415,12 +435,13 @@ function capturePreloadManifest(iwin: any): string[] {
  * Blob/URL are somehow unavailable.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function runScriptCode(idoc: Document, iwin: any, code: string): Promise<void> {
+function runScriptCode(idoc: Document, iwin: any, code: string, sourceName?: string): Promise<void> {
   return new Promise<void>((resolve) => {
     try {
       const BlobCtor = iwin.Blob || Blob;
       const URLObj = iwin.URL || URL;
-      const url: string = URLObj.createObjectURL(new BlobCtor([code], { type: "application/javascript" }));
+      const labelledCode = sourceName ? `${code}\n//# sourceURL=${sourceName}` : code;
+      const url: string = URLObj.createObjectURL(new BlobCtor([labelledCode], { type: "application/javascript" }));
       const s = idoc.createElement("script");
       s.src = url;
       s.onload = () => {
@@ -429,7 +450,7 @@ function runScriptCode(idoc: Document, iwin: any, code: string): Promise<void> {
       };
       s.onerror = () => {
         if (url) URLObj.revokeObjectURL(url);
-        pushLog("error", "[engine] blob script failed to execute");
+        pushLog("error", `[engine] ${sourceName || "blob script"} failed to load`);
         resolve();
       };
       idoc.body.appendChild(s);
