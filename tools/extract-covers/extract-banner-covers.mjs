@@ -30,6 +30,10 @@ const DIMS_FILE = path.join(SOURCE_DIR, "cover-dims.json");
 const TMP_DIR = path.join(os.tmpdir(), "banner-covers");
 const MAX_WIDTH = 480;
 const API = "https://prts.wiki/api.php";
+const PRTS_HEADERS = {
+  "User-Agent": "ArkstageResourceBuilder/1.0 (+https://github.com/djkcyl/arkstage)",
+  Referer: "https://prts.wiki/",
+};
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sanitize = (s) => s.replace(/[/\\:*?"<>|]/g, "_");
@@ -39,7 +43,7 @@ async function fileUrl(name) {
   const u = `${API}?action=query&format=json&prop=imageinfo&iiprop=url&titles=${encodeURIComponent("File:" + name)}`;
   for (let i = 0; i < 5; i++) {
     try {
-      const r = await fetch(u, { signal: AbortSignal.timeout(30_000) });
+      const r = await fetch(u, { headers: PRTS_HEADERS, signal: AbortSignal.timeout(30_000) });
       if (r.ok) {
         const d = await r.json();
         const pages = d?.query?.pages || {};
@@ -58,7 +62,7 @@ async function fileUrl(name) {
 async function download(url, dest) {
   for (let i = 0; i < 5; i++) {
     try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+      const r = await fetch(url, { headers: PRTS_HEADERS, signal: AbortSignal.timeout(60_000) });
       if (r.ok) {
         const b = Buffer.from(await r.arrayBuffer());
         if (b.length) {

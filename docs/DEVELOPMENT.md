@@ -11,7 +11,7 @@ resources@GitHub ─jsDelivr/GitHub Raw─▶ 书架元数据/封面    图片�
                        └──────────────── 本地缓存 (APPDATA) ───────────────┘
 ```
 
-- **Rust 后端**抓取并解析剧情目录与剧本，管理缓存，并提供自定义 `prts-cdn://` 协议：命中本地的内容寻址仓库（`$APPDATA/media/{host}/{path}`）即离线返回，未命中时（且允许联网）带正确 Referer 拉取并落盘。
+- **Rust 后端**抓取并解析剧情目录与剧本，管理缓存，并提供自定义 `prts-cdn://` 协议：所有上游请求统一经 `net::client()` 发送，使用可识别且含项目联系地址的 `Arkstage/<version>` User-Agent；命中本地的内容寻址仓库（`$APPDATA/media/{host}/{path}`）即离线返回，未命中时（且允许联网）带正确 Referer 拉取并落盘。PRTS 会拒绝伪装成通用浏览器的自动请求，因此不要把共享 User-Agent 改回 Chrome/Firefox 字符串。
 - **前端**在隔离的 `<iframe>` realm 中启动原版引擎（每个剧情独立 realm，避免引擎顶层 `const` 冲突），并复用引擎自身的 `fun_sys_preload()` 精确枚举某剧情所需资源用于预下载。
 - **书架资源**不进入安装包：`BookshelfMetadataContext` 先读 `cache/bookshelf-metadata.json`，每次启动再以 `cache: no-store` 刷新 jsDelivr；网络或格式失败则自动改走 `raw.githubusercontent.com`。只有通过完整校验的响应才会覆盖内存和缓存；双线路都失败时保留旧缓存并显示可重试提示。封面/横幅同样在首选源加载失败后切换另一源，使用哈希文件名并经 `prts-cdn://` 懒加载到内容寻址缓存，因此离线可复用，更新分类或封面无需发版。
 - **PRTS 演出运行时**使用同页原子快照：播放时从同一个响应提取剧情脚本、全部 `datas_*` 表和内联引擎，SHA-256 版本校验后写入 `story-runtime-v3`；外部 JS/CSS 每次应用生命周期热更新，完整性失败保留 last-known-good。引擎启动前会从 `datas_char` 为 `datas_link` 尚未收录的新角色补齐缺失分组，并静态审计立绘/背景/CG 引用。
@@ -164,6 +164,8 @@ node tools/extract-covers/extract-banner-covers.mjs
 node tools/extract-covers/extract-chapter-banners.mjs
 node tools/build-resources/build-bookshelf-resources.mjs build/resources
 ```
+
+新增乐章部署时，先运行 `gen-storylines.mjs --report` 确认新书名及所属 StoryLine，再同步两份人工校验映射：`tools/extract-covers/kv-map.json` 对应 ArknightsAssets2 的 `mixstory/kvs/kv_*.png`，`tools/extract-covers/chapter-banner-map.json` 对应活动页面 `活动信息` 模板中的 `标题图文件名`。生成后必须确认 `metadata.json` 同时包含新书名、`covers[书名]` 和 `banners[书名]`，再发布 `resources` 分支。所有读取 PRTS 的 Node 脚本也必须发送可识别且含项目联系地址的 Arkstage User-Agent；通用 Node/浏览器 UA 会被边缘防护拒绝为 403。
 
 ⚠️ **发版铁律**：发版前必须把 `package.json` 的 `version` 一并 bump 到 master 再打标签。应用内「检测更新」的首选源读取的就是 master 上 `package.json` 的 `version`（`cdn.jsdelivr.net/gh/<repo>@master/package.json`），漏 bump 会导致检测不到新版本。
 

@@ -23,10 +23,9 @@ fn api_url(page: &str) -> String {
 #[allow(dead_code)]
 async fn fetch_page_html(page: &str) -> Result<String, String> {
     let url = api_url(page);
-    let client = reqwest::Client::new();
-    let resp = client
+    crate::net::ensure_online()?;
+    let resp = crate::net::client()
         .get(&url)
-        .header("User-Agent", "PRTSReader/0.1")
         .send()
         .await
         .map_err(|e| format!("HTTP request failed: {}", e))?;

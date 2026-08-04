@@ -28,6 +28,10 @@ const COVERS_DIR = path.join(SOURCE_DIR, "covers");
 const TMP_DIR = path.join(os.tmpdir(), "chapter-banners");
 const MAX_WIDTH = 560;
 const API = "https://prts.wiki/api.php";
+const PRTS_HEADERS = {
+  "User-Agent": "ArkstageResourceBuilder/1.0 (+https://github.com/djkcyl/arkstage)",
+  Referer: "https://prts.wiki/",
+};
 // 特殊 modes whose chapter banner = their own cover (per request).
 const COVER_AS_BANNER = ["集成战略", "生息演算"];
 
@@ -38,7 +42,7 @@ async function fileUrl(name) {
   const u = `${API}?action=query&format=json&prop=imageinfo&iiprop=url&titles=${encodeURIComponent("File:" + name)}`;
   for (let i = 0; i < 5; i++) {
     try {
-      const r = await fetch(u, { signal: AbortSignal.timeout(30_000) });
+      const r = await fetch(u, { headers: PRTS_HEADERS, signal: AbortSignal.timeout(30_000) });
       if (r.ok) {
         const d = await r.json();
         const pages = d?.query?.pages || {};
@@ -57,7 +61,7 @@ async function fileUrl(name) {
 async function download(url, dest) {
   for (let i = 0; i < 5; i++) {
     try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+      const r = await fetch(url, { headers: PRTS_HEADERS, signal: AbortSignal.timeout(60_000) });
       if (r.ok) {
         const b = Buffer.from(await r.arrayBuffer());
         if (b.length) {

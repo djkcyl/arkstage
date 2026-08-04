@@ -46,11 +46,22 @@ pub fn ensure_online() -> Result<(), String> {
 
 /// Shared reqwest client (connection pooling, one consistent User-Agent). All
 /// HTTP in the app should use this instead of building ad-hoc clients.
+///
+/// PRTS' edge protection rejects generic browser impersonation with HTTP 403.
+/// Use an honest, contactable application identity so the wiki can distinguish
+/// Arkstage's rate-limited traffic from anonymous browser/bot traffic.
+fn user_agent() -> String {
+    format!(
+        "Arkstage/{} (+https://github.com/djkcyl/arkstage)",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
 pub fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            .user_agent(user_agent())
             .build()
             .unwrap()
     })
@@ -148,6 +159,18 @@ pub fn limiter() -> &'static RateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_agent_identifies_arkstage_and_has_a_contact_url() {
+        let value = user_agent();
+        assert_eq!(
+            value,
+            format!(
+                "Arkstage/{} (+https://github.com/djkcyl/arkstage)",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+    }
 
     #[test]
     fn ensure_online_gates_on_flag() {
