@@ -62,6 +62,8 @@ pub fn client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .user_agent(user_agent())
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(45))
             .build()
             .unwrap()
     })
@@ -221,7 +223,10 @@ mod tests {
         let start = Instant::now();
         rl.acquire(10_000).await; // must wait for a refill
         let elapsed = start.elapsed();
-        assert!(elapsed >= Duration::from_millis(600), "too fast: {elapsed:?}");
+        assert!(
+            elapsed >= Duration::from_millis(600),
+            "too fast: {elapsed:?}"
+        );
         assert!(elapsed < Duration::from_secs(3), "too slow: {elapsed:?}");
     }
 }

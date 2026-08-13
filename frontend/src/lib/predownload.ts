@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { bootEngineInFrame, prewarmEngineDeps, refreshEngineDeps } from "./engineBoot";
 import type { WidgetBundle } from "./engineBoot";
 import { setManifestProgress } from "./keepalive";
+import { pushLog } from "./debugLog";
 
 /**
  * Predownload status. Indexing (manifest) and downloading run CONCURRENTLY now
@@ -58,6 +59,12 @@ export function isOfflineError(e: unknown): boolean {
 let bundlePromise: Promise<WidgetBundle> | null = null;
 const storyRuntimePromises = new Map<string, Promise<StoryRuntime>>();
 
+/** Allow a later navigation/retry to re-fetch after a transient rejected request. */
+function retainOnlySuccess<T>(promise: Promise<T>, clear: () => void): Promise<T> {
+  void promise.catch(() => clear());
+  return promise;
+}
+
 interface RawStoryRuntime {
   story: { script: string; title: string };
   bundle: WidgetBundle;
@@ -67,24 +74,32 @@ interface RawStoryRuntime {
 export interface StoryRuntime extends RawStoryRuntime {
   source: "live" | "cache" | "legacy-cache";
   warning?: string;
+  /** Previous verified generation, used if visible-mode boot rejects the candidate. */
+  fallback?: RawStoryRuntime;
 }
 
 /** Load the shared widget bundle (engine DOM + scripts + global databases). */
 export function loadBundle(): Promise<WidgetBundle> {
-  if (!bundlePromise) bundlePromise = refreshBundle();
+  if (!bundlePromise) {
+    const pending = refreshBundle();
+    bundlePromise = retainOnlySuccess(pending, () => {
+      if (bundlePromise === pending) bundlePromise = null;
+    });
+  }
   return bundlePromise;
 }
 
 async function refreshBundle(): Promise<WidgetBundle> {
   let cached: WidgetBundle | null = null;
   try {
-    for (const key of ["widget-bundle-v4", "widget-bundle-v3", "widget-bundle-v2"]) {
+    for (const key of ["widget-bundle-v5", "widget-bundle-v4", "widget-bundle-v3", "widget-bundle-v2"]) {
       const raw = await invoke<string | null>("load_from_cache", { key });
       if (!raw) continue;
       const candidate = JSON.parse(raw) as WidgetBundle;
       // v3 briefly serialised script raw-text through innerHTML, corrupting JS
       // operators into HTML entities. Never use such a bundle as offline rollback.
-      if (!candidate.engine_scripts.some((script) => /&(?:amp|gt|lt|quot);/.test(script))) {
+      if (validateBundleShape(candidate).length === 0
+        && !candidate.engine_scripts.some((script) => /&(?:amp|gt|lt|quot);/.test(script))) {
         cached = candidate;
         break;
       }
@@ -97,14 +112,16 @@ async function refreshBundle(): Promise<WidgetBundle> {
     if (cached && isSuspiciousRegression(fresh, cached)) {
       throw new Error("PRTS 全局资源表数量异常回退，已拒绝覆盖本地可用版本");
     }
+    await validateBundleBoot(fresh, "W2G/BEG");
     await invoke("save_to_cache", {
-      key: "widget-bundle-v4",
+      key: "widget-bundle-v5",
       data: JSON.stringify(fresh),
     }).catch(() => {});
     await refreshEngineDeps();
     return fresh;
   } catch (error) {
     if (cached) {
+      pushLog("warn", "[runtime-update] PRTS 候选引擎验证失败，保留上次可用版本:", error);
       await refreshEngineDeps();
       return cached;
     }
@@ -119,25 +136,38 @@ function isSuspiciousRegression(fresh: WidgetBundle, cached: WidgetBundle): bool
   return a.background_entries < b.background_entries * 0.8
     || a.character_entries < b.character_entries * 0.8
     || a.link_groups < b.link_groups * 0.8
-    || a.engine_script_count < b.engine_script_count;
+    || a.engine_script_count < b.engine_script_count
+    || (a.audio_entries ?? 0) < (b.audio_entries ?? 0) * 0.8
+    || (a.engine_script_bytes ?? 0) < (b.engine_script_bytes ?? 0) * 0.7;
 }
 
 /** Exact-page, fresh-first script + engine/data snapshot for interactive playback. */
 export function loadStoryRuntime(title: string): Promise<StoryRuntime> {
   let promise = storyRuntimePromises.get(title);
   if (!promise) {
-    promise = refreshStoryRuntime(title);
+    const pending = refreshStoryRuntime(title);
+    promise = retainOnlySuccess(pending, () => {
+      if (storyRuntimePromises.get(title) === pending) storyRuntimePromises.delete(title);
+    });
     storyRuntimePromises.set(title, promise);
   }
   return promise;
 }
 
 async function refreshStoryRuntime(title: string): Promise<StoryRuntime> {
-  const key = `story-runtime-v4_${title.replace(/\//g, "_")}`;
+  const key = `story-runtime-v5_${title.replace(/\//g, "_")}`;
+  const previousKey = `${key}-previous`;
   let cached: RawStoryRuntime | null = null;
   try {
-    const raw = await invoke<string | null>("load_from_cache", { key });
-    if (raw) cached = JSON.parse(raw) as RawStoryRuntime;
+    for (const cacheKey of [key, previousKey, `story-runtime-v4_${title.replace(/\//g, "_")}`]) {
+      const raw = await invoke<string | null>("load_from_cache", { key: cacheKey });
+      if (!raw) continue;
+      const candidate = JSON.parse(raw) as RawStoryRuntime;
+      if (validateRuntimeShape(candidate).length === 0) {
+        cached = candidate;
+        break;
+      }
+    }
   } catch {
     // Continue with live fetch.
   }
@@ -146,11 +176,18 @@ async function refreshStoryRuntime(title: string): Promise<StoryRuntime> {
     if (cached && isSuspiciousRegression(fresh.bundle, cached.bundle)) {
       throw new Error("PRTS 当前同页快照完整性低于本地版本，已阻止覆盖");
     }
+    // This is the promotion gate: execute the candidate in a disposable iframe
+    // before it is allowed to replace last-known-good on disk.
+    await validateRuntimeBoot(fresh, title);
+    if (cached && cached.revision !== fresh.revision) {
+      await invoke("save_to_cache", { key: previousKey, data: JSON.stringify(cached) }).catch(() => {});
+    }
     await invoke("save_to_cache", { key, data: JSON.stringify(fresh) }).catch(() => {});
     await refreshEngineDeps();
-    return { ...fresh, source: "live" };
+    return { ...fresh, source: "live", fallback: cached ?? undefined };
   } catch (error) {
     if (cached) {
+      pushLog("warn", `[runtime-update] ${title}: 候选快照验证失败，自动回退`, error);
       await refreshEngineDeps();
       return { ...cached, source: "cache", warning: String(error) };
     }
@@ -170,6 +207,81 @@ async function refreshStoryRuntime(title: string): Promise<StoryRuntime> {
       };
     }
     throw error;
+  }
+}
+
+const REQUIRED_DATA_BLOCKS = ["datas_txt", "datas_back", "datas_char", "datas_audio", "datas_link"];
+const REQUIRED_ENGINE_CAPABILITIES = ["Timer", "system", "data.init", "fun_sys_init", "fun_sys_preload", "window.onload"];
+
+export function validateBundleShape(bundle: WidgetBundle): string[] {
+  const problems: string[] = [];
+  if (!bundle || !Array.isArray(bundle.engine_scripts)) return ["快照格式无效"];
+  const diagnostics = bundle.diagnostics;
+  for (const id of REQUIRED_DATA_BLOCKS) {
+    if (!bundle.data_blocks_html?.includes(`id="${id}"`)) problems.push(`缺少 #${id}`);
+  }
+  if (!bundle.dom_html?.includes("id=\"sys_main\"")) problems.push("缺少 #sys_main");
+  const engine = bundle.engine_scripts.join("\n");
+  const markers: Record<string, RegExp> = {
+    Timer: /function\s+Timer\b/,
+    system: /\bvar\s+system\b/,
+    "data.init": /\bdata\.init\s*\(/,
+    fun_sys_init: /\bfun_sys_init\b/,
+    fun_sys_preload: /\bfun_sys_preload\b/,
+    "window.onload": /\bwindow\.onload\b/,
+  };
+  for (const capability of REQUIRED_ENGINE_CAPABILITIES) {
+    if (!markers[capability].test(engine)) problems.push(`引擎缺少 ${capability}`);
+  }
+  if (engine.length < 10_000) problems.push(`引擎脚本异常短 (${engine.length} bytes)`);
+  if (diagnostics) {
+    if (diagnostics.background_entries < 100) problems.push("背景表异常短");
+    if (diagnostics.character_entries < 100) problems.push("角色表异常短");
+    if ((diagnostics.audio_entries ?? 10) < 10) problems.push("音频表异常短");
+    if (diagnostics.link_groups < 50) problems.push("角色链接表异常短");
+  }
+  return problems;
+}
+
+function validateRuntimeShape(runtime: RawStoryRuntime): string[] {
+  const problems = validateBundleShape(runtime?.bundle);
+  if (!runtime?.story?.script?.trim()) problems.push("剧情脚本为空");
+  if (!runtime?.revision) problems.push("快照版本缺失");
+  return problems;
+}
+
+async function validateRuntimeBoot(runtime: RawStoryRuntime, title: string): Promise<void> {
+  const problems = validateRuntimeShape(runtime);
+  if (problems.length) throw new Error(`候选快照结构验证失败: ${problems.join("；")}`);
+  await validateCandidateBoot(runtime.bundle, runtime.story.script, title);
+}
+
+async function validateBundleBoot(bundle: WidgetBundle, title: string): Promise<void> {
+  const problems = validateBundleShape(bundle);
+  if (problems.length) throw new Error(`候选引擎结构验证失败: ${problems.join("；")}`);
+  const parsed = new DOMParser().parseFromString(bundle.data_blocks_html, "text/html");
+  const script = parsed.getElementById("datas_txt")?.textContent || "";
+  if (!script.trim()) throw new Error("候选引擎自带剧情脚本为空");
+  await validateCandidateBoot(bundle, script, title);
+}
+
+async function validateCandidateBoot(bundle: WidgetBundle, script: string, title: string): Promise<void> {
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = "position:fixed;left:-99999px;top:0;width:960px;height:540px;border:0;";
+  document.body.appendChild(iframe);
+  try {
+    const result = await bootEngineInFrame({ iframe, bundle, script, title, mode: "manifest" });
+    if (!result.health || result.health.globals.length < 4) {
+      throw new Error("候选引擎未通过启动健康检查");
+    }
+    if (result.audit?.missing.length) {
+      throw new Error(`资源引用缺失: ${result.audit.missing.slice(0, 8).join("；")}`);
+    }
+    if (!result.manifest?.length) {
+      throw new Error("候选引擎未能完成预加载资源解析");
+    }
+  } finally {
+    iframe.remove();
   }
 }
 

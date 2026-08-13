@@ -83,14 +83,34 @@ export default function StoryPlayerPage() {
         iframe.style.cssText = "width:100%;height:100%;border:0;display:block;background:#000;";
         container.innerHTML = "";
         container.appendChild(iframe);
-        const boot = await bootEngineInFrame({
-          iframe,
-          bundle: runtime.bundle,
-          script: runtime.story.script,
-          title: decodedTitle,
-          mode: "play",
-          isCancelled: () => cancelled,
-        });
+        let boot;
+        try {
+          boot = await bootEngineInFrame({
+            iframe,
+            bundle: runtime.bundle,
+            script: runtime.story.script,
+            title: decodedTitle,
+            mode: "play",
+            isCancelled: () => cancelled,
+          });
+        } catch (candidateError) {
+          if (!runtime.fallback || cancelled) throw candidateError;
+          setSyncWarning(
+            `PRTS 最新演出引擎启动失败，已自动切换到上一可用版本。\n${candidateError instanceof Error ? candidateError.message : String(candidateError)}`
+          );
+          iframe.remove();
+          const fallbackFrame = document.createElement("iframe");
+          fallbackFrame.style.cssText = "width:100%;height:100%;border:0;display:block;background:#000;";
+          container.appendChild(fallbackFrame);
+          boot = await bootEngineInFrame({
+            iframe: fallbackFrame,
+            bundle: runtime.fallback.bundle,
+            script: runtime.fallback.story.script,
+            title: decodedTitle,
+            mode: "play",
+            isCancelled: () => cancelled,
+          });
+        }
 
         if (boot.audit?.missing.length) {
           setSyncWarning(`演出资源表校验发现 ${boot.audit.missing.length} 项缺失：\n${boot.audit.missing.slice(0, 8).join("\n")}`);

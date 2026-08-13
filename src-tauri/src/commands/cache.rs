@@ -238,7 +238,14 @@ fn delete_chapter_cache_in(root: &Path, titles: &[String]) -> DeleteResult {
     let mut stories_cleared: u64 = 0;
     for t in titles {
         let mut any = false;
-        for f in [manifest_filename(t), story_filename(t), runtime_filename(t)] {
+        for f in [
+            manifest_filename(t),
+            story_filename(t),
+            runtime_filename(t, 3, false),
+            runtime_filename(t, 4, false),
+            runtime_filename(t, 5, false),
+            runtime_filename(t, 5, true),
+        ] {
             let path = cache.join(f);
             if let Ok(meta) = std::fs::metadata(&path) {
                 freed += meta.len();
@@ -315,10 +322,11 @@ fn manifest_filename(title: &str) -> String {
 fn story_filename(title: &str) -> String {
     format!("{}.json", sanitize_filename(&format!("stories_{title}")))
 }
-fn runtime_filename(title: &str) -> String {
+fn runtime_filename(title: &str, version: u8, previous: bool) -> String {
+    let suffix = if previous { "-previous" } else { "" };
     format!(
         "{}.json",
-        sanitize_filename(&format!("story-runtime-v3_{title}"))
+        sanitize_filename(&format!("story-runtime-v{version}_{title}{suffix}"))
     )
 }
 
@@ -377,6 +385,14 @@ mod tests {
         )
         .unwrap();
         fs::write(cache.join(story_filename("Ch/A")), "{}").unwrap();
+        for path in [
+            runtime_filename("Ch/A", 3, false),
+            runtime_filename("Ch/A", 4, false),
+            runtime_filename("Ch/A", 5, false),
+            runtime_filename("Ch/A", 5, true),
+        ] {
+            fs::write(cache.join(path), "{}").unwrap();
+        }
         fs::write(
             cache.join(manifest_filename("Ch/B")),
             serde_json::to_string(&[shared, only_b]).unwrap(),
@@ -393,9 +409,11 @@ mod tests {
         // A's cache files gone; B's kept.
         assert!(!cache.join(manifest_filename("Ch/A")).exists());
         assert!(!cache.join(story_filename("Ch/A")).exists());
+        assert!(!cache.join(runtime_filename("Ch/A", 5, false)).exists());
+        assert!(!cache.join(runtime_filename("Ch/A", 5, true)).exists());
         assert!(cache.join(manifest_filename("Ch/B")).exists());
-        // 1 media (onlyA) + 2 cache files removed, 1 story cleared.
-        assert_eq!(r.deleted_files, 3);
+        // 1 media + manifest + script + four runtime generations.
+        assert_eq!(r.deleted_files, 7);
         assert_eq!(r.stories_cleared, 1);
         let _ = fs::remove_dir_all(&root);
     }

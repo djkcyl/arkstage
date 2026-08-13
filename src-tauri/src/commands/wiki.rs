@@ -4,6 +4,7 @@ use crate::models::{
 use crate::parser::{story_index, story_page};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::time::Duration;
 
 const _WIKI_API: &str = "https://prts.wiki/api.php";
 
@@ -56,19 +57,65 @@ async fn fetch_page_raw(page: &str) -> Result<String, String> {
     crate::net::ensure_online()?;
     let encoded = urlencoding::encode(page);
     let url = format!("https://prts.wiki/w/{}", encoded);
-    let resp = crate::net::client()
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}: {}", resp.status(), url));
+    let mut last_error = String::new();
+    for attempt in 1..=3 {
+        let response = crate::net::client()
+            .get(&url)
+            .header("Referer", "https://prts.wiki/")
+            .send()
+            .await;
+        match response {
+            Ok(resp) if resp.status().is_success() => {
+                if resp
+                    .content_length()
+                    .is_some_and(|len| len > 20 * 1024 * 1024)
+                {
+                    return Err(format!("PRTS response is unexpectedly large: {url}"));
+                }
+                let content_type = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if !content_type.is_empty()
+                    && !content_type.contains("text/html")
+                    && !content_type.contains("application/xhtml")
+                {
+                    return Err(format!(
+                        "Unexpected PRTS content type {content_type}: {url}"
+                    ));
+                }
+                let bytes = resp
+                    .bytes()
+                    .await
+                    .map_err(|e| format!("Failed to read response: {e}"))?;
+                if bytes.len() > 20 * 1024 * 1024 {
+                    return Err(format!("PRTS response is unexpectedly large: {url}"));
+                }
+                let html = String::from_utf8(bytes.to_vec())
+                    .map_err(|_| format!("PRTS response is not UTF-8 HTML: {url}"))?;
+                if !html.to_ascii_lowercase().contains("<html") {
+                    return Err(format!(
+                        "PRTS response does not contain an HTML document: {url}"
+                    ));
+                }
+                return Ok(html);
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                last_error = format!("HTTP {status}: {url}");
+                if status.is_client_error() && status.as_u16() != 429 {
+                    break;
+                }
+            }
+            Err(error) => last_error = format!("HTTP request failed: {error}"),
+        }
+        if attempt < 3 {
+            tokio::time::sleep(Duration::from_millis(attempt * 350)).await;
+        }
     }
-
-    resp.text()
-        .await
-        .map_err(|e| format!("Failed to read response: {}", e))
+    Err(last_error)
 }
 
 /// Fetch the story index by parsing prts.wiki's 剧情一览 HTML. The app ships a
@@ -127,7 +174,7 @@ pub async fn fetch_page_revisions(titles: Vec<String>) -> Result<HashMap<String,
 #[tauri::command]
 pub async fn fetch_story_page(page_title: String) -> Result<StoryPageData, String> {
     let html = fetch_page_raw(&page_title).await?;
-    story_page::extract_story_script(&html)
+    story_page::extract_story_script_for(&html, Some(&page_title))
         .ok_or_else(|| format!("No story script found on page: {}", page_title))
 }
 
@@ -145,7 +192,7 @@ pub async fn fetch_widget_bundle(page_title: String) -> Result<WidgetBundleData,
 #[tauri::command]
 pub async fn fetch_story_runtime(page_title: String) -> Result<StoryRuntimeData, String> {
     let html = fetch_page_raw(&page_title).await?;
-    let story = story_page::extract_story_script(&html)
+    let story = story_page::extract_story_script_for(&html, Some(&page_title))
         .ok_or_else(|| format!("No story script found on page: {}", page_title))?;
     let bundle = widget_from_html(&html)?;
     let revision = sha256_parts(&[story.script.as_bytes(), bundle.revision.as_bytes()]);
@@ -180,21 +227,60 @@ fn widget_from_html(html: &str) -> Result<WidgetBundleData, String> {
             missing.join(", ")
         ));
     }
-    if !bundle.dom_html.contains("sys_main") {
-        return Err("Incomplete ScenarioSimulator DOM: #sys_main missing".to_string());
+    let required_dom = [
+        "sys_main",
+        "sys_clicker",
+        "dialog_output",
+        "button_playback",
+        "button_playback_all",
+        "button_auto",
+        "button_reset",
+        "sys_audio",
+    ];
+    let missing_dom: Vec<&str> = required_dom
+        .into_iter()
+        .filter(|id| !bundle.dom_element_ids.iter().any(|got| got == id))
+        .collect();
+    if !missing_dom.is_empty() {
+        return Err(format!(
+            "Incomplete ScenarioSimulator DOM: missing {}",
+            missing_dom.join(", ")
+        ));
     }
 
     let background_entries = bundle.background_entries;
     let character_entries = bundle.character_entries;
+    let audio_entries = bundle.audio_entries;
     let link_groups = bundle
         .link_groups
         .ok_or_else(|| "Invalid datas_link JSON".to_string())?;
 
     // A partially cached/truncated PRTS response can still contain all element
     // IDs. Reject obviously incomplete snapshots before they replace last-known-good.
-    if background_entries < 100 || character_entries < 100 || link_groups < 50 {
+    if background_entries < 100 || character_entries < 100 || audio_entries < 10 || link_groups < 50
+    {
         return Err(format!(
-            "Suspiciously small ScenarioSimulator tables (backgrounds={background_entries}, characters={character_entries}, links={link_groups})"
+            "Suspiciously small ScenarioSimulator tables (backgrounds={background_entries}, characters={character_entries}, audio={audio_entries}, links={link_groups})"
+        ));
+    }
+
+    let required_capabilities = [
+        "Timer",
+        "system",
+        "data.init",
+        "fun_sys_init",
+        "fun_sys_preload",
+        "window.onload",
+    ];
+    let missing_capabilities: Vec<&str> = required_capabilities
+        .into_iter()
+        .filter(|name| !bundle.engine_capabilities.iter().any(|got| got == name))
+        .collect();
+    if !missing_capabilities.is_empty() || bundle.engine_script_bytes < 10_000 {
+        return Err(format!(
+            "Incomplete ScenarioSimulator engine (bytes={}, missing={})",
+            bundle.engine_script_bytes,
+            missing_capabilities.join(", ")
         ));
     }
 
@@ -212,10 +298,14 @@ fn widget_from_html(html: &str) -> Result<WidgetBundleData, String> {
         revision,
         diagnostics: WidgetDiagnostics {
             data_block_ids: bundle.data_block_ids,
+            dom_element_ids: bundle.dom_element_ids,
             background_entries,
             character_entries,
+            audio_entries,
             link_groups,
             engine_script_count,
+            engine_script_bytes: bundle.engine_script_bytes,
+            engine_capabilities: bundle.engine_capabilities,
         },
     })
 }
@@ -253,5 +343,46 @@ mod tests {
             .bundle
             .data_blocks_html
             .contains("bg_75_mini01_plantation"));
+    }
+
+    #[test]
+    fn rejects_markerless_or_tiny_engine_before_cache_promotion() {
+        let backgrounds = (0..101)
+            .map(|i| format!("bg_{i},u"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let characters = (0..101)
+            .map(|i| format!("char_{i},u"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let audio = serde_json::to_string(
+            &(0..11)
+                .map(|i| (format!("a{i}"), "u"))
+                .collect::<HashMap<_, _>>(),
+        )
+        .unwrap();
+        let links = serde_json::to_string(
+            &(0..51)
+                .map(|i| (format!("c{i}"), serde_json::json!({})))
+                .collect::<HashMap<_, _>>(),
+        )
+        .unwrap();
+        let html = format!(
+            r#"
+          <h1 id="firstHeading">Broken</h1>
+          <div id="sys_fullscreen">
+            <div id="sys_main"></div><div id="sys_clicker"></div>
+            <div id="dialog_output"></div><button id="button_playback"></button>
+            <button id="button_playback_all"></button><button id="button_auto"></button>
+            <button id="button_reset"></button>
+          </div><div id="sys_audio"></div>
+          <pre id="datas_txt">story</pre>
+          <pre id="datas_back">{backgrounds}</pre><pre id="datas_char">{characters}</pre>
+          <pre id="datas_audio">{audio}</pre><pre id="datas_link">{links}</pre>
+          <script class="navigation-not-searchable">console.log('not the engine')</script>
+        "#
+        );
+        let error = widget_from_html(&html).unwrap_err();
+        assert!(error.contains("Incomplete ScenarioSimulator engine"));
     }
 }

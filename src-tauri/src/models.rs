@@ -68,8 +68,16 @@ pub struct WidgetBundleData {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WidgetDiagnostics {
     pub data_block_ids: Vec<String>,
+    #[serde(default)]
+    pub dom_element_ids: Vec<String>,
     pub background_entries: usize,
     pub character_entries: usize,
+    #[serde(default)]
+    pub audio_entries: usize,
     pub link_groups: usize,
     pub engine_script_count: usize,
+    #[serde(default)]
+    pub engine_script_bytes: usize,
+    #[serde(default)]
+    pub engine_capabilities: Vec<String>,
 }

@@ -1,5 +1,5 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import { PROXY_BASE, WIKI_CDN_DOMAINS, proxyUrl, rewriteAllCdnUrls } from "./proxy";
+import { PROXY_BASE, discoverAssetDomains, proxyUrl, rewriteAllCdnUrls } from "./proxy";
 import { captureIframe, pushLog } from "./debugLog";
 import { scenarioLinkOverrides, type ScenarioLinkOverride } from "./BookshelfMetadataContext";
 
@@ -23,10 +23,14 @@ export interface WidgetBundle {
   revision?: string;
   diagnostics?: {
     data_block_ids: string[];
+    dom_element_ids?: string[];
     background_entries: number;
     character_entries: number;
+    audio_entries?: number;
     link_groups: number;
     engine_script_count: number;
+    engine_script_bytes?: number;
+    engine_capabilities?: string[];
   };
 }
 
@@ -47,6 +51,13 @@ export interface FrameBootResult {
   /** In "manifest" mode: the deduped original asset URLs from fun_sys_preload. */
   manifest?: string[];
   audit?: ScenarioAudit;
+  health?: EngineHealth;
+}
+
+export interface EngineHealth {
+  globals: string[];
+  engineScriptCount: number;
+  assetDomains: string[];
 }
 
 export interface ScenarioAudit {
@@ -107,6 +118,11 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   const { iframe, bundle, script, title, mode } = opts;
   const isCancelled = opts.isCancelled ?? (() => false);
   const play = mode === "play";
+  const assetDomains = discoverAssetDomains(
+    bundle.dom_html,
+    bundle.data_blocks_html,
+    ...bundle.engine_scripts
+  );
   bundleScriptCount = bundle.engine_scripts.length;
   await refreshEngineDeps();
 
@@ -124,13 +140,10 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   if (normalizedScript !== script) {
     pushLog("info", `[engine] normalized malformed character group spacing in ${title}`);
   }
-  let dataBlocksHtml = bundle.data_blocks_html.replace(
-    /<pre class="hidden" id="datas_txt">[\s\S]*?<\/pre>/,
-    `<pre class="hidden" id="datas_txt">${escapeHtml(normalizedScript)}</pre>`
-  );
+  let dataBlocksHtml = replaceDataBlock(bundle.data_blocks_html, "datas_txt", normalizedScript);
   // manifest mode keeps RAW CDN URLs so captured assets are original https URLs.
-  const domHtml = play ? rewriteAllCdnUrls(bundle.dom_html) : bundle.dom_html;
-  if (play) dataBlocksHtml = rewriteAllCdnUrls(dataBlocksHtml);
+  const domHtml = play ? rewriteAllCdnUrls(bundle.dom_html, assetDomains) : bundle.dom_html;
+  if (play) dataBlocksHtml = rewriteAllCdnUrls(dataBlocksHtml, assetDomains);
   // NOTE: render off-screen rather than `display:none`. The engine reads the page
   // name via `tarObj.innerText` in data.init(); on Chromium/WebView2 `innerText`
   // of a non-rendered (display:none) element is "", which corrupts system.page and
@@ -165,12 +178,13 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
 
   if (play) {
     // URL-rewrite shim (patches the iframe's own Image/Audio/Source prototypes).
-    await runScriptCode(idoc, iwin, buildShimCode());
+    await runScriptCode(idoc, iwin, buildShimCode(assetDomains));
     // Font + CSS.
     const fontUrl = await ensureFontCached();
     await loadCssInDoc(idoc, fontUrl);
   }
   if (isCancelled()) return {};
+  const depsRevision = engineRefreshPromise ? await engineRefreshPromise : "unknown";
 
   // === Load JS deps in order (into the iframe realm) ===
   await loadScriptInDoc(idoc, await resolveAssetUrl(EXTERNALS.jquery));
@@ -179,24 +193,30 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   if (isCancelled()) return {};
   await loadScriptInDoc(idoc, await resolveAssetUrl(EXTERNALS.toolbox));
   if (isCancelled()) return {};
+  assertExternalDepsReady(iwin, depsRevision);
 
   // === Execute engine scripts (defines data/system/queue/fun_sys_preload, runs fun_sys_init) ===
-  // Run as Blob-URL <script src> (not inline). On WebView2 the engine's inline
-  // scripts silently did not execute (window.system/onload stayed undefined);
-  // a blob: script is exempt from 'unsafe-inline' and executes reliably.
-  for (const [index, code] of bundle.engine_scripts.entries()) {
-    if (isCancelled()) return {};
-    await runScriptCode(
-      idoc,
-      iwin,
-      play ? rewriteAllCdnUrls(code) : code,
-      `prts-engine-${index + 1}.js`
-    );
-  }
+  // PRTS emits several classic scripts which share one global lexical scope.
+  // Execute them as one program: besides preserving that contract, this avoids a
+  // Chromium WebView failure where separate blob: scripts emitted opaque errors
+  // for every block and none of them defined their globals.
+  if (isCancelled()) return {};
+  validateEngineSource(bundle.engine_scripts);
+  const engineCode = bundle.engine_scripts
+    .map((code, index) => `// ---- PRTS engine block ${index + 1} ----\n${code}`)
+    .join("\n;\n")
+    + engineCompatibilityPatch();
+  await runScriptCode(
+    idoc,
+    iwin,
+    play ? rewriteAllCdnUrls(engineCode, assetDomains) : engineCode,
+    "prts-engine.js"
+  );
+  const health = assertEngineReady(iwin, assetDomains);
 
   if (mode === "manifest") {
     reportBootHealth(iwin);
-    return { manifest: capturePreloadManifest(iwin), audit };
+    return { manifest: capturePreloadManifest(iwin), audit, health };
   }
 
   // === Play: run jQuery ready (fun_sys_preload + event wiring) and window.onload ===
@@ -209,7 +229,39 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   // real browser fullscreen, leaving black margins in our windowed webview).
   installWindowedFit(iwin, idoc);
   reportBootHealth(iwin);
-  return { audit };
+  return { audit, health };
+}
+
+/** Fast fail for cached snapshots created by older, less strict parsers. */
+export function validateEngineSource(scripts: readonly string[]): void {
+  const source = scripts.join("\n");
+  const problems: string[] = [];
+  const markers: Array<[string, RegExp]> = [
+    ["Timer", /function\s+Timer\b/],
+    ["system", /\bvar\s+system\b/],
+    ["data.init", /\bdata\.init\s*\(/],
+    ["fun_sys_init", /\bfun_sys_init\b/],
+    ["fun_sys_preload", /\bfun_sys_preload\b/],
+    ["window.onload", /\bwindow\.onload\b/],
+  ];
+  if (source.length < 10_000) problems.push(`脚本异常短 (${source.length} bytes)`);
+  if (/&(?:amp|gt|lt|quot);/.test(source)) problems.push("脚本包含 HTML 实体");
+  for (const [name, marker] of markers) if (!marker.test(source)) problems.push(`缺少 ${name}`);
+  if (problems.length) throw new Error(`PRTS 引擎源码不完整: ${problems.join("；")}`);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function assertExternalDepsReady(iwin: any, revision: string): void {
+  const missing: string[] = [];
+  if (typeof iwin.$ !== "function" || !iwin.$.fn?.jquery) missing.push("jQuery");
+  if (typeof iwin.createjs?.LoadQueue !== "function") missing.push("PreloadJS.LoadQueue");
+  // toolbox declares `class TimerManager` as a global lexical binding (not a
+  // window property), but also installs these stable prototype helpers.
+  if (typeof iwin.Array?.prototype?.empty !== "function"
+    || typeof iwin.Array?.prototype?.last !== "function") missing.push("krliov.toolbox");
+  if (missing.length) {
+    throw new Error(`PRTS 外部引擎依赖不完整: ${missing.join(", ")} (revision=${revision})`);
+  }
 }
 
 /** Static mirror of the engine's preload key resolution. This catches a script /
@@ -361,7 +413,7 @@ function reportBootHealth(iwin: any): void {
   try {
     // Probe what actually initialized, to distinguish causes:
     //  jQuery/createjs="undefined" -> external dep <script src> didn't load/run
-    //  system/onload missing but deps present -> engine scripts (blob) failed
+    //  system/onload missing but deps present -> engine program failed
     pushLog(
       "info",
       "[boot] probe:",
@@ -394,6 +446,26 @@ function reportBootHealth(iwin: any): void {
   }
 }
 
+/** Fail the page boot instead of revealing a permanently frozen loading stage. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function assertEngineReady(iwin: any, assetDomains: string[]): EngineHealth {
+  const missing = [
+    ["Timer", iwin.Timer],
+    ["system", iwin.system],
+    ["fun_sys_preload", iwin.fun_sys_preload],
+    ["window.onload", iwin.onload],
+  ].filter(([, value]) => typeof value === "undefined" || value === null)
+    .map(([name]) => name);
+  if (missing.length > 0) {
+    throw new Error(`PRTS 引擎初始化不完整，缺少: ${missing.join(", ")}`);
+  }
+  return {
+    globals: ["Timer", "system", "fun_sys_preload", "window.onload"],
+    engineScriptCount: bundleScriptCount,
+    assetDomains,
+  };
+}
+
 /**
  * Hook the iframe's createjs.LoadQueue.prototype.loadFile to record URLs, run the
  * engine's fun_sys_preload() (which resolves the deduped asset set), then restore.
@@ -415,61 +487,155 @@ function capturePreloadManifest(iwin: any): string[] {
     // Do NOT call orig -> no queueing/loading.
   };
   try {
-    if (typeof iwin.fun_sys_preload === "function") iwin.fun_sys_preload();
-    else console.warn("captureManifest: fun_sys_preload not defined in iframe");
+    if (typeof iwin.fun_sys_preload !== "function") {
+      throw new Error("fun_sys_preload is not defined in iframe");
+    }
+    iwin.fun_sys_preload();
   } catch (e) {
-    console.warn("fun_sys_preload capture error:", e);
+    pushLog("error", "[engine] fun_sys_preload capture failed:", e);
+    throw new Error(`PRTS 预加载执行失败: ${errorMessage(e)}`);
   } finally {
     proto.loadFile = orig;
   }
   return Array.from(new Set(captured));
 }
 
+/**
+ * Compatibility fixes for verified upstream engine defects. This code is appended
+ * to the same classic program as PRTS's scripts, so it can reach their top-level
+ * lexical `scenario` binding without depending on it becoming a window property.
+ *
+ * Current PRTS charLink() adds a group's start offset twice for `$G`, and repeats
+ * that mistake when `#N$G` is out of range. The resulting undefined array entry
+ * makes charFormat() throw and aborts both playback and asset preloading. Resolve
+ * grouped references deterministically and keep the engine's documented default-
+ * character fallback for any other bad index.
+ */
+function engineCompatibilityPatch(): string {
+  return `
+;(() => {
+  if (typeof scenario !== "object" || !scenario.extend || typeof scenario.extend.charLink !== "function") return;
+  const originalCharLink = scenario.extend.charLink;
+  const originalCharFormat = scenario.extend.charFormat;
+  scenario.extend.charLink = function (value) {
+    const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+    const grouped = raw.match(/^([^@#$]+)(?:#(\\d+))?\\$(\\d+)$/);
+    if (grouped && typeof data === "object" && data.link) {
+      const key = grouped[1];
+      const entries = data.link[key] && data.link[key].array;
+      if (Array.isArray(entries) && entries.length) {
+        const suffix = "$" + grouped[3];
+        const start = entries.findIndex((entry) => entry && typeof entry.name === "string" && entry.name.endsWith(suffix));
+        if (start >= 0) {
+          let end = entries.findIndex((entry, index) => index > start && (!entry || typeof entry.name !== "string" || !entry.name.endsWith(suffix)));
+          if (end < 0) end = entries.length;
+          const offset = grouped[2] ? Number(grouped[2]) - 1 : 0;
+          return [key, offset >= 0 && start + offset < end ? start + offset : start];
+        }
+      }
+    }
+    const result = originalCharLink.call(this, value);
+    if (Array.isArray(result) && result[0] !== -1 && typeof data === "object" && data.link) {
+      const entries = data.link[result[0]] && data.link[result[0]].array;
+      if (Array.isArray(entries) && entries.length && !entries[result[1]]) return [result[0], 0];
+    }
+    return result;
+  };
+  if (typeof originalCharFormat === "function") {
+    scenario.extend.charFormat = function (key, index) {
+      const entries = typeof data === "object" && data.link && data.link[key] && data.link[key].array;
+      if (Array.isArray(entries) && entries.length && !entries[index]) return entries[0].name;
+      return originalCharFormat.call(this, key, index);
+    };
+  }
+})();`;
+}
+
 // ─── helpers (operate on the iframe's document/window) ──────────────────────
 
 /**
- * Execute script code in the iframe realm via a Blob-URL <script src> (resolves
- * after it runs). Unlike an inline <script>, a blob: script is not subject to a
- * CSP 'unsafe-inline' restriction and executes reliably on WebView2, where the
- * engine's inline scripts were silently not running. Falls back to inline if
- * Blob/URL are somehow unavailable.
+ * Execute script code synchronously in the iframe's global realm. Tauri's CSP
+ * explicitly permits unsafe-eval, and this path works on Chromium WebViews that
+ * sometimes accept blob: script elements but then report only an opaque Event
+ * without executing their source. A single blob remains the policy fallback.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function runScriptCode(idoc: Document, iwin: any, code: string, sourceName?: string): Promise<void> {
-  return new Promise<void>((resolve) => {
+async function runScriptCode(idoc: Document, iwin: any, code: string, sourceName?: string): Promise<void> {
+  const name = sourceName || "engine script";
+  const labelledCode = sourceName ? `${code}\n//# sourceURL=${sourceName}` : code;
+  try {
+    if (typeof iwin.eval !== "function") throw new EvalError("iframe eval is unavailable");
+    iwin.eval(labelledCode);
+    return;
+  } catch (error) {
+    // A real exception from the upstream code must not be retried: declarations
+    // or event handlers may already have been installed. Only a CSP/eval-policy
+    // rejection is safe to retry through an external classic script.
+    const message = errorMessage(error);
+    if (!/unsafe-eval|content security policy|refused to evaluate|eval is unavailable/i.test(message)) {
+      pushLog("error", `[engine] ${name} threw:`, error);
+      throw new Error(`${name} 执行失败: ${message}`);
+    }
+    pushLog("warn", `[engine] ${name}: eval unavailable, using blob fallback`, error);
+  }
+
+  await runBlobScript(idoc, iwin, code, name, sourceName);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function runBlobScript(idoc: Document, iwin: any, code: string, name: string, sourceName?: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let url = "";
+    const marker = `__prtsExec_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     try {
       const BlobCtor = iwin.Blob || Blob;
       const URLObj = iwin.URL || URL;
-      const labelledCode = sourceName ? `${code}\n//# sourceURL=${sourceName}` : code;
-      const url: string = URLObj.createObjectURL(new BlobCtor([labelledCode], { type: "application/javascript" }));
+      const labelledCode = `${code}\n;window[${JSON.stringify(marker)}] = true;${sourceName ? `\n//# sourceURL=${sourceName}` : ""}`;
+      url = URLObj.createObjectURL(new BlobCtor([labelledCode], { type: "application/javascript" }));
       const s = idoc.createElement("script");
+      const finish = (error?: Error) => {
+        URLObj.revokeObjectURL(url);
+        try { delete iwin[marker]; } catch { /* disposable iframe realm */ }
+        if (error) {
+          pushLog("error", `[engine] ${error.message}`);
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
       s.src = url;
-      s.onload = () => {
-        if (url) URLObj.revokeObjectURL(url);
-        resolve();
-      };
-      s.onerror = () => {
-        if (url) URLObj.revokeObjectURL(url);
-        pushLog("error", `[engine] ${sourceName || "blob script"} failed to load`);
-        resolve();
-      };
+      s.onload = () => finish(iwin[marker] === true
+        ? undefined
+        : new Error(`${name} loaded but did not finish executing`));
+      s.onerror = () => finish(new Error(`${name} failed to load`));
       idoc.body.appendChild(s);
-    } catch (e) {
-      pushLog("warn", "blob exec unavailable, falling back to inline:", e);
-      const s = idoc.createElement("script");
-      s.textContent = code;
-      idoc.body.appendChild(s);
-      resolve();
+    } catch (error) {
+      if (url) {
+        try { (iwin.URL || URL).revokeObjectURL(url); } catch { /* ignore */ }
+      }
+      const wrapped = new Error(`${name} blob fallback failed: ${errorMessage(error)}`);
+      pushLog("error", "[engine]", wrapped);
+      reject(wrapped);
     }
   });
 }
 
+function errorMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    const shaped = error as { message?: unknown; name?: unknown };
+    if (typeof shaped.message === "string" && shaped.message) {
+      return `${typeof shaped.name === "string" ? `${shaped.name}: ` : ""}${shaped.message}`;
+    }
+  }
+  return String(error);
+}
+
 /** Build the dynamic URL-rewrite shim source (patches the doc's Image/Audio/Source src). */
-function buildShimCode(): string {
+function buildShimCode(assetDomains: readonly string[]): string {
   return `
 (function() {
   var PROXY_BASE = ${JSON.stringify(PROXY_BASE)};
-  var CDN_DOMAINS = ${JSON.stringify(WIKI_CDN_DOMAINS)};
+  var CDN_DOMAINS = ${JSON.stringify(assetDomains)};
   function rewriteUrl(url) {
     if (typeof url !== 'string') return url;
     for (var i = 0; i < CDN_DOMAINS.length; i++) {
@@ -754,4 +920,16 @@ export function escapeHtml(str: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/** Replace a data table independent of tag name, class order, or quote style. */
+function replaceDataBlock(html: string, id: string, text: string): string {
+  const escapedId = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const block = new RegExp(
+    `<([a-z][\\w:-]*)\\b(?=[^>]*\\bid=["']${escapedId}["'])[^>]*>[\\s\\S]*?<\\/\\1>`,
+    "i"
+  );
+  const replacement = `<pre class="hidden" id="${escapeHtml(id)}">${escapeHtml(text)}</pre>`;
+  if (!block.test(html)) throw new Error(`PRTS 数据快照缺少 #${id}`);
+  return html.replace(block, replacement);
 }
