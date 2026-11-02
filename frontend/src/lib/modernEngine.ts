@@ -1,6 +1,6 @@
 import { moduleDependencies, buildEngineModule } from "./engineModule";
 import { PROXY_BASE, proxyUrl } from "./proxy";
-import { captureIframe, pushLog } from "./debugLog";
+import { captureIframe, pushLog, playbackCheckpoint } from "./debugLog";
 import type { FrameBootOptions, FrameBootResult } from "./engineBoot";
 
 export interface ModuleEngine {
@@ -39,7 +39,7 @@ interface NativePlayer {
 interface EngineBridge {
   loadContext(script: string): Promise<unknown>;
   createPlayer(context: unknown): NativePlayer;
-  preload(context: unknown): Promise<void>;
+  preload(context: unknown, onProgress?: (progress: number) => void): Promise<void>;
   manifest(context: unknown): string[];
   setVolume(volume: number): void;
 }
@@ -165,6 +165,10 @@ function installRouting(win: Window & typeof globalThis, metadata: Set<string>):
 }
 
 export async function bootModernEngineInFrame(opts: FrameBootOptions): Promise<FrameBootResult> {
+  const checkpoint = async (stage: string, detail = "") => {
+    if (opts.mode === "play" && !opts.isCancelled?.()) await playbackCheckpoint(opts.title, stage, detail);
+  };
+  await checkpoint("prepare");
   const descriptor = opts.bundle.module_engine!;
   const runtime = await prepareEngine(descriptor);
   if (opts.isCancelled?.()) return {};
@@ -198,17 +202,42 @@ export async function bootModernEngineInFrame(opts: FrameBootOptions): Promise<F
   const nickname = localStorage.getItem("prts-nickname") || "博士";
   const script = opts.script.replaceAll("{@nickname}", nickname);
   const context = await bridge.loadContext(script);
+  await checkpoint("context-ready");
   const urls = bridge.manifest(context);
   const manifest = [...new Set([...runtime.resources, ...metadata, ...urls])].filter((url) => /^https?:\/\//.test(url));
   if (!urls.length) throw new Error("PRTS 新版引擎未生成资源清单");
   const health = { globals: ["createStoryPlayer", "loadContextByScript", "collectPreloadAssetUrls", "preloadContextAssets"], engineScriptCount: runtime.resources.length, assetDomains: OFFICIAL_HOSTS };
   pushLog("info", `[module-engine] ${opts.title}: ${manifest.length} assets; entry=${descriptor.entry_url}`);
   if (opts.mode === "manifest") return { manifest, health };
-  await bridge.preload(context);
+  opts.onStatus?.("正在预加载画面资源…");
+  await checkpoint("preload-start", `assets=${manifest.length}; audio=on-demand; decode-batch=2`);
+  let lastProgress = -1;
+  await bridge.preload(context, (progress) => {
+    const percent = Math.floor(progress * 10) * 10;
+    opts.onStatus?.(`正在预加载画面资源… ${Math.round(progress * 100)}%`);
+    if (percent !== lastProgress) { lastProgress = percent; pushLog("info", `[playback] ${opts.title} preload=${percent}%`); }
+  });
+  await checkpoint("preload-ready");
   if (opts.isCancelled?.()) return {};
   const host = doc.getElementById("arkstage-stage")!;
   let player = bridge.createPlayer(context);
+  opts.onStatus?.("正在创建兼容模式画布…");
+  await checkpoint("renderer-mount", "preference=webgl; antialias=false; resolution<=1.5");
   await player.mount(host);
+  await checkpoint("ready", `canvas=${host.querySelector("canvas")?.width}x${host.querySelector("canvas")?.height}`);
+  const watchContext = () => {
+    const canvas = host.querySelector("canvas");
+    const lost = (event: Event) => {
+      if (opts.isCancelled?.()) return;
+      event.preventDefault();
+      pushLog("error", `[playback] ${opts.title} WebGL context lost`);
+      void checkpoint("context-lost");
+      opts.onFatal?.("图形上下文丢失，诊断日志已保存。请返回书架后重试。");
+    };
+    canvas?.addEventListener("webglcontextlost", lost);
+    return () => canvas?.removeEventListener("webglcontextlost", lost);
+  };
+  let removeContextListener = watchContext();
   let uiVisible = true;
   const controller: PlayerController = {
     async advance() {
@@ -216,9 +245,12 @@ export async function bootModernEngineInFrame(opts: FrameBootOptions): Promise<F
       await (player.getState() === "idle" ? player.start() : player.advance());
     },
     async reset() {
+      await checkpoint("reset");
+      removeContextListener();
       host.removeEventListener("click", onClick);
       player.destroy(); host.replaceChildren(); player = bridge.createPlayer(context); await player.mount(host);
       host.addEventListener("click", onClick);
+      removeContextListener = watchContext();
       showStartPrompt();
     },
     setAuto(enabled) { player.setAutoPlayMode(enabled ? "button_auto" : "default"); },
@@ -231,7 +263,11 @@ export async function bootModernEngineInFrame(opts: FrameBootOptions): Promise<F
     },
     async skip() { if (player.canSkipNode()) await player.skipNode(); },
     state() { return { state: player.getState(), auto: player.getAutoPlayState().mode !== "default", line: player.getDisplayedLineIndex(), speed: player.getAutoPlayState().buttonSpeedLevel + 1, canSkip: player.canSkipNode() }; },
-    dispose() { host.removeEventListener("click", onClick); player.destroy(); },
+    dispose() {
+      void playbackCheckpoint(opts.title, "disposed");
+      removeContextListener();
+      host.removeEventListener("click", onClick); player.destroy();
+    },
   };
   const onClick = () => {
     if (!uiVisible) { controller.setUIVisible(true); return; }

@@ -130,6 +130,7 @@ rustup target add "${triples[@]}"
 echo "==> Pre-build cleanup"
 scripts/clean.sh --junk
 ARTIFACTS_DIR="build/artifacts"
+ARTIFACT_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')
 mkdir -p "$ARTIFACTS_DIR"
 rm -f "$ARTIFACTS_DIR"/*.apk
 # Ensure a fresh frontend bundle.
@@ -159,7 +160,8 @@ if [ "${#apks[@]}" -eq 0 ]; then
   exit 1
 fi
 for apk in "${apks[@]}"; do
-  dest="$ARTIFACTS_DIR/$(basename "$apk")"
+  apk_name="$(basename "$apk")"
+  dest="$ARTIFACTS_DIR/Arkstage_${ARTIFACT_VERSION}_android-${apk_name#app-}"
   cp -f "$apk" "$dest"
   echo "    -> $dest"
 done

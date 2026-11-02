@@ -48,6 +48,8 @@ export interface FrameBootOptions {
   mode: "play" | "manifest";
   /** Polled between async steps so a cancelled boot can bail early. */
   isCancelled?: () => boolean;
+  onStatus?: (status: string) => void;
+  onFatal?: (message: string) => void;
 }
 
 export interface FrameBootResult {

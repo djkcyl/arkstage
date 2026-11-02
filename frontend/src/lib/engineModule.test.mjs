@@ -54,6 +54,46 @@ test("unsupported modules fail explicitly instead of presenting a frozen player"
   assert.throws(() => buildEngineModule("export const unknown=1;", ENTRY, new Map(), (url) => url), /模块接口不兼容/);
 });
 
+test("renderer uses WebGL with bounded resolution after viewport changes", async () => {
+  const extra = `
+    function displayResolution(host){return host.dpr;}
+    export class Renderer {
+      async mount(host){const app={async init(options){globalThis.renderOptions=options}}; await app.init({width:1280,height:720,preference:'webgpu',antialias:true,resolution:displayResolution(host)});}
+      resize(host){return displayResolution(host);}
+    }
+  `;
+  const output = buildEngineModule(fixture("Graphics") + extra, ENTRY, new Map([[CONTEXT, contextSource]]), (url) => url === CONTEXT
+    ? `data:text/javascript;base64,${Buffer.from(contextSource).toString("base64")}` : url);
+  const module = await import(`data:text/javascript;base64,${Buffer.from(output).toString("base64")}`);
+  const renderer = new module.Renderer();
+  await renderer.mount({dpr:4});
+  assert.equal(globalThis.renderOptions.preference, "webgl");
+  assert.equal(globalThis.renderOptions.antialias, false);
+  assert.equal(globalThis.renderOptions.resolution, 1.5);
+  assert.equal(renderer.resize({dpr:3}), 1.5);
+  assert.equal(renderer.resize({dpr:0.75}), 0.75);
+});
+
+test("preload defers audio decoding and bounds image batches without breaking lazy audio", async () => {
+  let source = fixture("Memory").replace("const Assets = {load:async()=>{}}", "const Assets = {load:async(input)=>{globalThis.assetLoads.push(input);return {}}}");
+  source = source.replace("return [...urls];", "return [...urls, 'track.mp3', 'effect.ogg', 'a.png', 'b.png', 'c.png', 'd.png'];");
+  source += "export async function lazyAudio(){await Assets.load('track.mp3')}";
+  const output = buildEngineModule(source, ENTRY, new Map([[CONTEXT, contextSource]]), (url) => url === CONTEXT
+    ? `data:text/javascript;base64,${Buffer.from(contextSource).toString("base64")}` : url);
+  globalThis.assetLoads = [];
+  const oldFontFace = globalThis.FontFace;
+  globalThis.FontFace = class {};
+  try {
+    const module = await import(`data:text/javascript;base64,${Buffer.from(output).toString("base64")}`);
+    await module.arkstageEngine.preload(await module.arkstageEngine.loadContext("test"));
+    assert.ok(globalThis.assetLoads.length >= 3);
+    assert.ok(globalThis.assetLoads.every(batch=>Array.isArray(batch)&&batch.length<=2));
+    assert.ok(globalThis.assetLoads.flat().every(url=>!url.endsWith('.mp3')&&!url.endsWith('.ogg')));
+    await module.lazyAudio();
+    assert.equal(globalThis.assetLoads.at(-1), 'track.mp3');
+  } finally { globalThis.FontFace = oldFontFace; delete globalThis.assetLoads; }
+});
+
 test("live upstream module can be adapted when fixtures are provided", { skip: !process.env.PRTS_MODULE_FIXTURE || !process.env.PRTS_CONTEXT_FIXTURE }, () => {
   const source = readFileSync(process.env.PRTS_MODULE_FIXTURE, "utf8");
   const dependency = moduleDependencies(source, ENTRY).find((url) => /\/context\./.test(url));

@@ -34,8 +34,10 @@ RELEASE=0 scripts/build-android.sh       # debug APKs with on-screen console ena
 ```
 
 The finished APKs are copied to **`build/artifacts/`** and are gitignored.
-By default the script produces `app-arm64-release.apk`, `app-x86_64-release.apk`
-and `app-universal-release.apk` (both ABIs). Release APKs use the debug signing
+By default the script produces `Arkstage_<version>_android-arm64-release.apk`,
+`Arkstage_<version>_android-x86_64-release.apk` and
+`Arkstage_<version>_android-universal-release.apk` (both ABIs). Versioned filenames
+prevent accidentally installing an older downloaded test APK. Release APKs use the debug signing
 config unless a release keystore is supplied, so they can be installed for testing.
 The script removes stale APKs there before building and cleans scratch/junk
 before and after. Preserve any previous test packages elsewhere before running it.
@@ -69,7 +71,7 @@ adb wait-for-device
 until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; do sleep 2; done
 
 # Install + launch
-adb install -r build/artifacts/app-universal-debug.apk
+adb install -r build/artifacts/Arkstage_*_android-universal-debug.apk
 adb shell am start -n cn.aunly.arkstage/.MainActivity
 
 # Observe
@@ -91,7 +93,7 @@ physical device (below). The APK + a device install is the source of truth.
 Enable Developer Options → USB debugging, connect, then:
 
 ```bash
-adb install -r build/artifacts/app-universal-debug.apk
+adb install -r build/artifacts/Arkstage_*_android-universal-debug.apk
 adb shell am start -n cn.aunly.arkstage/.MainActivity
 ```
 

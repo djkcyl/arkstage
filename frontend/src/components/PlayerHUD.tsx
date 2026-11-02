@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PlayerController } from "../lib/modernEngine";
+import { pushLog } from "../lib/debugLog";
 import nativeLayout from "../assets/player-ui/layout.json";
 import settingsIcon from "../assets/player-ui/settings.png";
 import logIcon from "../assets/player-ui/log.png";
@@ -78,7 +79,7 @@ export default function PlayerHUD({ controller, script, onExit, onError }: {
     return () => clearInterval(timer);
   }, [controller]);
 
-  const run = (action: () => Promise<void>) => { void action().catch((error) => onError(String(error))); };
+  const run = (action: () => Promise<void>) => { void action().catch((error) => { pushLog("error", "[playback] control failed:", error); onError(String(error)); }); };
   const open = (value: Panel) => { controller.setAuto(false); setPanel(value); };
   const reveal = () => { controller.setUIVisible(true); setHidden(false); };
 

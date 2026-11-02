@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { clearLog, getEntries, subscribe, type LogEntry } from "../lib/debugLog";
+import { clearLog, getEntries, getInterruptedPlayback, subscribe, type LogEntry } from "../lib/debugLog";
 import { isDebugConsoleEnabled, subscribeDebugSetting } from "../lib/debugSettings";
+import { collectDiagnosticReport, copyText, exportDiagnosticReport } from "../lib/diagnostics";
 
 /**
  * Always-mounted floating debug console. Shows errors/warnings captured from the
@@ -12,21 +13,26 @@ import { isDebugConsoleEnabled, subscribeDebugSetting } from "../lib/debugSettin
  */
 export default function DebugConsole() {
   const [, force] = useState(0);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => !!getInterruptedPlayback());
+  const [message, setMessage] = useState("");
 
   useEffect(() => subscribe(() => force((n) => n + 1)), []);
   // Re-render when the user flips the debug-console setting so it can show/hide live.
   useEffect(() => subscribeDebugSetting(() => force((n) => n + 1)), []);
 
   // Hidden unless enabled (build default, overridable in Settings).
-  if (!isDebugConsoleEnabled()) return null;
+  if (!isDebugConsoleEnabled() && !getInterruptedPlayback()) return null;
 
   const entries = getEntries();
   const errorCount = entries.filter((e) => e.level === "error").length;
 
-  const copyAll = () => {
-    const text = entries.map((e) => `[${levelTag(e)}] ${e.msg}`).join("\n");
-    navigator.clipboard?.writeText(text).catch(() => {});
+  const copyAll = async () => {
+    try { await copyText(await collectDiagnosticReport()); setMessage("完整诊断已复制"); }
+    catch (error) { setMessage(String(error)); }
+  };
+  const exportAll = async () => {
+    try { setMessage(`诊断已导出：${await exportDiagnosticReport()}`); }
+    catch (error) { setMessage(`导出失败：${String(error)}`); }
   };
 
   if (!open) {
@@ -36,7 +42,7 @@ export default function DebugConsole() {
         style={{ ...toggleStyle, background: errorCount ? "#b71c1c" : "rgba(0,0,0,0.6)" }}
         title="查看调试日志"
       >
-        调试日志{errorCount ? ` (${errorCount})` : entries.length ? ` ·${entries.length}` : ""}
+        {getInterruptedPlayback() ? "上次阅读异常 · " : ""}调试日志{errorCount ? ` (${errorCount})` : entries.length ? ` ·${entries.length}` : ""}
       </button>
     );
   }
@@ -46,12 +52,15 @@ export default function DebugConsole() {
       <div style={headerStyle}>
         <span style={{ fontWeight: 600 }}>调试日志 ({entries.length})</span>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={copyAll} style={smallBtn}>复制</button>
+          <button onClick={() => void copyAll()} style={smallBtn}>复制</button>
+          <button onClick={() => void exportAll()} style={smallBtn}>导出</button>
           <button onClick={clearLog} style={smallBtn}>清空</button>
           <button onClick={() => setOpen(false)} style={smallBtn}>收起</button>
         </div>
       </div>
       <div style={listStyle}>
+        {message && <div role="status">{message}</div>}
+        {getInterruptedPlayback() && <div style={{ color: "#ffd166" }}>上次阅读未正常结束。此处保留了最后播放阶段，复制或导出可包含原生退出信息。</div>}
         {entries.length === 0 && <div style={{ color: "#888" }}>暂无日志</div>}
         {entries.map((e) => (
           <div key={e.id} style={{ color: levelColor(e.level), whiteSpace: "pre-wrap", marginBottom: 4 }}>

@@ -10,7 +10,7 @@ import { useDownload } from "../lib/DownloadContext";
 import { useCompression } from "../lib/CompressionContext";
 import type { Tier, CompressEstimate } from "../lib/CompressionContext";
 import type { StoryIndex } from "../hooks/useStoryIndex";
-import { collectEnvInfo, copyText } from "../lib/diagnostics";
+import { collectEnvInfo, copyText, collectDiagnosticReport, exportDiagnosticReport } from "../lib/diagnostics";
 
 interface CacheStatus {
   story_index_cached: boolean;
@@ -293,6 +293,11 @@ export default function SettingsPage() {
             （构建默认：{debugBuildDefault() ? "开" : "关"}）
           </span>
         </div>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
+          <button className="nav-btn" onClick={() => void collectDiagnosticReport().then(copyText).then(() => showMsg("完整诊断已复制")).catch((e) => showMsg(`复制失败：${String(e)}`, 5000))}>复制完整诊断</button>
+          <button className="nav-btn" onClick={() => void exportDiagnosticReport().then((path) => showMsg(`诊断日志已导出：${path}`, 8000)).catch((e) => showMsg(`导出失败：${String(e)}`, 5000))}>导出诊断日志</button>
+        </div>
+        <p style={{ color: "var(--text-secondary)", fontSize: "13px" }}>日志自动保留，重新打开应用后仍可导出上次播放阶段及系统退出信息，无需提前开启控制台。</p>
       </div>
 
       {/* Resource directory (desktop only — Android storage is fixed) */}

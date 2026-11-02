@@ -2,6 +2,7 @@ mod android_service;
 mod commands;
 mod compress;
 mod data_root;
+mod diagnostics;
 mod download;
 mod media;
 mod models;
@@ -267,13 +268,21 @@ pub fn run() {
                     data_root::init(dir);
                 }
             }
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            diagnostics::init();
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Info)
+                    .max_file_size(512 * 1024)
+                    .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                    .targets([
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
+                            path: data_root::data_root().join("logs"),
+                            file_name: Some("runtime".into()),
+                        }),
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    ])
+                    .build(),
+            )?;
             // Register the managed download engine (bulk predownload jobs).
             download::init(app.handle());
             // Restore compression mode + resume an interrupted batch if any.
@@ -335,6 +344,9 @@ pub fn run() {
             data_root::reset_resource_dir,
             // External links (About page)
             open_external,
+            diagnostics::record_diagnostic,
+            diagnostics::read_diagnostics,
+            diagnostics::export_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

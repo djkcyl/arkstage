@@ -119,6 +119,28 @@ export function buildEngineModule(source: string, entryUrl: string, modules: Rea
   if (![assetCollector, parseContext, fontCollector, fontResolver].every(Boolean)) fail("字体与内置资源清单");
 
   const edits: Array<{ start: number; end: number; text: string }> = [];
+  // The wiki prefers WebGPU and unbounded display resolution. Android emulators
+  // can expose an adapter whose native driver dies during device/context setup.
+  // Keep the upstream renderer but use WebGL and a bounded drawing buffer.
+  for (const call of descendants(ast, (n) => n.type === "CallExpression"
+    && name(child(child(n, "callee"), "property")) === "init")) {
+    const options = children(call, "arguments")[0];
+    if (options?.type !== "ObjectExpression") continue;
+    const properties = children(options, "properties");
+    const preference = properties.find((p) => name(child(p, "key")) === "preference");
+    const resolution = properties.find((p) => name(child(p, "key")) === "resolution");
+    if (!preference || !resolution) continue;
+    const value = child(preference, "value")!;
+    edits.push({ ...value, text: '"webgl"' });
+    const antialias = properties.find((p) => name(child(p, "key")) === "antialias");
+    if (antialias) edits.push({ ...child(antialias, "value")!, text: "false" });
+    const resolver = name(child(child(resolution, "value"), "callee"));
+    const resolutionFunction = functions.find((fn) => name(child(fn, "id")) === resolver);
+    if (resolutionFunction) for (const ret of descendants(resolutionFunction, (n) => n.type === "ReturnStatement")) {
+      const argument = child(ret, "argument");
+      if (argument) edits.push({ ...argument, text: `Math.min(1.5, Math.max(0.5, ${source.slice(argument.start, argument.end)}))` });
+    }
+  }
   const factoryNode = functions.find((fn) => name(child(fn, "id")) === factory)!;
   const playerObject = descendants(factoryNode, (n) => n.type === "ObjectExpression").find((n) => {
     const keys = children(n, "properties").map((p) => name(child(p, "key")));
@@ -151,7 +173,28 @@ export function buildEngineModule(source: string, entryUrl: string, modules: Rea
   let output = source;
   for (const edit of activeEdits.sort((a, b) => b.start - a.start)) output = output.slice(0, edit.start) + edit.text + output.slice(edit.end);
   return `${output}\n${assets}.setPreferences?.({preferWorkers: false});\nexport const arkstageEngine = {
-    createPlayer: ${factory}, loadContext: ${contextLoader}, preload: ${preload},
+    createPlayer: ${factory}, loadContext: ${contextLoader},
+    async preload(context, onProgress) {
+      const originalLoad = ${assets}.load;
+      // Audio is loaded by the native audio engine on demand. Decoding every
+      // music track into PCM before mount can kill a mobile renderer process.
+      ${assets}.load = async function(input, options) {
+        if (!Array.isArray(input)) return originalLoad.call(this, input, options);
+        const urls = input.filter(item => !/\\.(mp3|ogg|wav|m4a|aac|flac)(?:[?#]|$)/i.test(typeof item === 'string' ? item : item.src || ''));
+        const progress = typeof options === 'function' ? options : options?.onProgress;
+        const results = {};
+        for (let start = 0; start < urls.length; start += 2) {
+          const batch = urls.slice(start, start + 2);
+          const report = value => progress?.((start + value * batch.length) / urls.length);
+          const next = typeof options === 'function' ? report : {...options, onProgress: report};
+          Object.assign(results, await originalLoad.call(this, batch, next));
+        }
+        if (!urls.length) progress?.(1);
+        return results;
+      };
+      try { await ${preload}(context, onProgress); }
+      finally { ${assets}.load = originalLoad; }
+    },
     setVolume(volume) { ${sound ? `${sound}.volumeAll = volume;` : "void volume;"} },
     manifest(context) { const lines = ${parseContext}(context); return [...new Set([
       ...${assetCollector}(context, lines), ...${fontCollector}(lines).map(font => ${fontResolver}(font.file))

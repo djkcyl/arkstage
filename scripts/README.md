@@ -4,7 +4,7 @@
 
 | Script | What it does | Needs network | Needs display |
 |--------|--------------|:-------------:|:-------------:|
-| `test-static.sh` | classic/ESM engine + bookshelf metadata tests + `cargo test` + `cargo build` + `tsc -b frontend` + `vite build frontend` | no | no |
+| `test-static.sh` | classic/ESM engine + persistent diagnostics + bookshelf metadata tests + `cargo test` + `cargo build` + `tsc -b frontend` + `vite build frontend` | no | no |
 | `test-e2e.sh` | launches the real app under headless **Xvfb**, drives the UI with **xdotool**, asserts on real side-effects | **yes** (prts.wiki) | Xvfb |
 | `test-manifest-e2e.sh [title...]` | runs the real iframe manifest + Rust downloader without fragile pixel clicks | **yes** (prts.wiki) | Xvfb |
 | `run-tests.sh` | runs static then e2e | yes | Xvfb |

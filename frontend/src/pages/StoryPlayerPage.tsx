@@ -10,6 +10,7 @@ import { setImmersive } from "../lib/immersive";
 import { useHidePlayerBack } from "../lib/uiSettings";
 import type { PlayerController } from "../lib/modernEngine";
 import PlayerHUD from "../components/PlayerHUD";
+import { playbackCheckpoint, pushLog } from "../lib/debugLog";
 
 /**
  * Story player page — loads the ORIGINAL PRTS ScenarioSimulator engine via bootEngine().
@@ -103,6 +104,8 @@ export default function StoryPlayerPage() {
             title: decodedTitle,
             mode: "play",
             isCancelled: () => cancelled,
+            onStatus: setStatus,
+            onFatal: setError,
           });
         } catch (candidateError) {
           if (!runtime.fallback || cancelled) throw candidateError;
@@ -120,6 +123,8 @@ export default function StoryPlayerPage() {
             title: decodedTitle,
             mode: "play",
             isCancelled: () => cancelled,
+            onStatus: setStatus,
+            onFatal: setError,
           });
           setStoryScript(runtime.fallback.story.script);
         }
@@ -135,6 +140,8 @@ export default function StoryPlayerPage() {
         setLoading(false);
       } catch (e) {
         if (!cancelled) {
+          pushLog("error", "[playback] initialization failed:", e);
+          await playbackCheckpoint(decodedTitle, "failed", String(e));
           setError(e instanceof Error ? e.message : String(e));
           setLoading(false);
         }
@@ -145,6 +152,7 @@ export default function StoryPlayerPage() {
       cancelled = true;
       controllerRef.current?.dispose();
       controllerRef.current = null;
+      void playbackCheckpoint(decodedTitle, "cancelled");
       // Removing the iframe disposes the whole engine realm (timers, audio, globals).
       try {
         container
