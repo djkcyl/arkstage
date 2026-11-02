@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { isDebugConsoleEnabled, setDebugPref, debugBuildDefault } from "../lib/debugSettings";
-import { isHidePlayerBack, setHidePlayerBack } from "../lib/uiSettings";
+import { isHidePlayerBack, setHidePlayerBack, useLogFontSize, setLogFontSize, LOG_FONT_MIN, LOG_FONT_MAX } from "../lib/uiSettings";
 import { isAndroid } from "../lib/platform";
 import { getDownloadSettings, setDownloadSettings } from "../lib/predownload";
 import { useDownload } from "../lib/DownloadContext";
@@ -42,6 +42,7 @@ export default function SettingsPage() {
   const [resDir, setResDir] = useState<ResourceDirInfo | null>(null);
   const [debugConsole, setDebugConsole] = useState(isDebugConsoleEnabled());
   const [hidePlayerBack, setHidePlayerBackState] = useState(isHidePlayerBack());
+  const logFontSize = useLogFontSize();
   // Download tuning: concurrency + bandwidth limit (shown in KB/s; 0 = unlimited).
   const [concurrency, setConcurrency] = useState(4);
   const [rateLimitKbps, setRateLimitKbps] = useState(0);
@@ -232,6 +233,21 @@ export default function SettingsPage() {
           />
           <button className="btn-primary" onClick={saveNickname}>保存</button>
         </div>
+      </div>
+
+      <div className="setting-group">
+        <label htmlFor="log-font-size">剧情日志（LOG）字号</label>
+        <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
+          <input id="log-font-size" type="range" min={LOG_FONT_MIN} max={LOG_FONT_MAX} step={1}
+            value={logFontSize} onChange={(event) => setLogFontSize(Number(event.target.value))}
+            style={{ width: "min(280px, 100%)" }} />
+          <output htmlFor="log-font-size">{logFontSize} px</output>
+        </div>
+        <div style={{ marginTop: "12px", padding: "12px 16px", borderLeft: "2px solid var(--text-secondary)", fontSize: `${logFontSize}px`, lineHeight: 1.7 }}>
+          <div style={{ color: "var(--text-secondary)", marginBottom: ".25em" }}>阿米娅</div>
+          <div>博士，我们准备出发吧。</div>
+        </div>
+        <p style={{ color: "var(--text-secondary)", fontSize: "13px" }}>自动保存，仅调整 LOG 内的文字大小。</p>
       </div>
 
       {/* Download tuning */}

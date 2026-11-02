@@ -10,6 +10,7 @@ npm run test:engine
 npm run test:modules
 npm run test:diagnostics
 npm run test:playback
+npm run test:transcript
 
 echo "==> [2/6] bookshelf metadata fallback tests"
 npm run test:metadata
