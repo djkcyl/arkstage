@@ -12,12 +12,14 @@ resources@GitHub ─jsDelivr/GitHub Raw─▶ 书架元数据/封面    图片�
 ```
 
 - **Rust 后端**抓取并解析剧情目录与剧本，管理缓存，并提供自定义 `prts-cdn://` 协议：所有上游请求统一经 `net::client()` 发送，使用可识别且含项目联系地址的 `Arkstage/<version>` User-Agent；命中本地的内容寻址仓库（`$APPDATA/media/{host}/{path}`）即离线返回，未命中时（且允许联网）带正确 Referer 拉取并落盘。PRTS 会拒绝伪装成通用浏览器的自动请求，因此不要把共享 User-Agent 改回 Chrome/Firefox 字符串。
-- **前端**在隔离的 `<iframe>` realm 中启动原版引擎（每个剧情独立 realm，避免引擎顶层 `const` 冲突），并复用引擎自身的 `fun_sys_preload()` 精确枚举某剧情所需资源用于预下载。
+- **前端**在隔离的 `<iframe>` realm 中启动原版引擎。新版页面动态发现带哈希的 ESM 入口、递归缓存模块依赖，并复用引擎自身的资源收集器生成预下载清单；旧版页面保留 `fun_sys_preload()` 路径。
 - **书架资源**不进入安装包：`BookshelfMetadataContext` 先读 `cache/bookshelf-metadata.json`，每次启动再以 `cache: no-store` 刷新 jsDelivr；网络或格式失败则自动改走 `raw.githubusercontent.com`。只有通过完整校验的响应才会覆盖内存和缓存；双线路都失败时保留旧缓存并显示可重试提示。封面/横幅同样在首选源加载失败后切换另一源，使用哈希文件名并经 `prts-cdn://` 懒加载到内容寻址缓存，因此离线可复用，更新分类或封面无需发版。
-- **PRTS 演出运行时**使用同页原子快照：播放时从同一个响应提取剧情脚本、全部 `datas_*` 表和内联引擎，SHA-256 版本校验后写入 `story-runtime-v3`；外部 JS/CSS 每次应用生命周期热更新，完整性失败保留 last-known-good。引擎启动前会从 `datas_char` 为 `datas_link` 尚未收录的新角色补齐缺失分组，并静态审计立绘/背景/CG 引用。
+- **PRTS 演出运行时**使用同页原子快照：从同一个响应提取剧情脚本与模块入口，校验并通过隔离启动测试后写入 `story-runtime-v6`，保留上一代快照供失败回滚。`engineModule.ts` 使用 Acorn 按语法结构发现播放器、上下文和预加载 API，不固定上游哈希文件名或压缩变量名；删除入口中的外置 Vue UI 挂载，只桥接演出引擎。无哈希的角色、背景和变量 JSON 每次启动刷新，离线或无效响应回退本地缓存；模块和数据指纹一同决定清单是否失效。Pixi 使用当前 iframe 的资源加载器，使媒体、字体和模块均经过本地协议缓存。
+- **顶部覆盖层**由 `PlayerHUD.tsx` 提供，按游戏的 1280×720 舞台比例缩放，使用客户端 AVG 按钮图标、角点锚定坐标和触摸热区；不挂载 PRTS 的外置工具栏。设置、日志、隐藏、速度、自动与跳过调用原引擎控制器。`tools/extract-player-ui.py` 可从官方 APK 复现导出，依赖 UnityPy 1.25.4 和 Pillow；产物来源见 `frontend/src/assets/player-ui/README.md`。
+- **外部依赖兼容**：每个引擎 iframe 加载 toolbox 后执行 `installEngineCompatibility`，补齐新版工具库删掉、但音频 `fade()` 仍调用的 `Math.clamp`。已有实现保留，兼容补丁不修改应用主窗口。使用 `npm run test:engine` 回归验证；设置 `PRTS_TOOLBOX_FIXTURE=/path/to/krliov.toolbox.js` 可直接校验下载的上游工具库。
 - **预下载同步校验**先批量查询 MediaWiki oldid；只有页面 oldid、全局表哈希和外部引擎哈希全部匹配的 v2 manifest 才会复用。媒体下载与协议缓存会校验文件魔数并原子写入，HTML 错误页、空文件和中断文件会被删除后重新拉取。
 
-更详细的设计见 [`docs/superpowers/specs`](superpowers/specs) 与 [`docs/superpowers/plans`](superpowers/plans)；架构约定见仓库根 [`CLAUDE.md`](../CLAUDE.md)。
+更详细的设计见 [`docs/superpowers/specs`](superpowers/specs) 与 [`docs/superpowers/plans`](superpowers/plans)。
 
 ## 环境要求
 
@@ -59,6 +61,8 @@ npm run dev            # 仅启动前端（Vite，浏览器调试用；引擎相
 npm run build          # 仅构建前端（tsc + vite）
 npm run lint           # ESLint
 npm run test:metadata  # 书架元数据校验与 jsDelivr → GitHub 回退单测
+npm run test:engine    # 演出工具库兼容与音频淡出回归测试
+npm run test:modules   # ESM 依赖解析、动态 API 桥接和外置 UI 隔离
 
 # —— 仅后端（Rust / Tauri）——
 cargo test  --manifest-path src-tauri/Cargo.toml   # 后端单元测试

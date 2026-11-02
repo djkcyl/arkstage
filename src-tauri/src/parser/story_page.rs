@@ -1,6 +1,6 @@
 use scraper::{Html, Selector};
 
-use crate::models::StoryPageData;
+use crate::models::{ModuleEngine, StoryPageData};
 
 /// Prefer the simulator whose DOM owns the requested page's script. MediaWiki
 /// can render examples/templates containing another #datas_txt before the real
@@ -37,6 +37,7 @@ pub fn extract_story_script_for(html: &str, expected_title: Option<&str>) -> Opt
 /// Returns: DOM structure, data block elements, and inline script blocks.
 pub fn extract_widget_html(html: &str) -> WidgetBundle {
     let document = Html::parse_document(html);
+    let module_engine = extract_module_engine(&document);
 
     // 1) Extract the main widget DOM: #sys_fullscreen container + #sys_audio
     //    Use .inner_html() to get the children only, then re-wrap with correct outer tag.
@@ -153,6 +154,7 @@ pub fn extract_widget_html(html: &str) -> WidgetBundle {
         dom_html,
         data_blocks_html,
         engine_scripts,
+        module_engine,
         data_block_ids,
         background_entries,
         character_entries,
@@ -232,6 +234,7 @@ pub struct WidgetBundle {
     pub dom_html: String,
     pub data_blocks_html: String,
     pub engine_scripts: Vec<String>,
+    pub module_engine: Option<ModuleEngine>,
     pub data_block_ids: Vec<String>,
     pub background_entries: usize,
     pub character_entries: usize,
@@ -242,6 +245,41 @@ pub struct WidgetBundle {
     pub engine_capabilities: Vec<String>,
 }
 
+fn extract_module_engine(document: &Html) -> Option<ModuleEngine> {
+    let scripts = Selector::parse("script[type='module'][src]").unwrap();
+    let urls: Vec<&str> = document
+        .select(&scripts)
+        .filter_map(|el| el.value().attr("src"))
+        .filter(|url| url.starts_with("https://static.prts.wiki/widgets/") && url.ends_with(".js"))
+        .collect();
+    let entry = urls.iter().find(|url| {
+        url.rsplit('/')
+            .next()
+            .is_some_and(|file| file.starts_with("StoryPlayer.") || file == "StoryPlayer.js")
+    })?;
+    let links = Selector::parse("link[rel='stylesheet'][href]").unwrap();
+    Some(ModuleEngine {
+        entry_url: entry.to_string(),
+        stylesheet_urls: document
+            .select(&links)
+            .filter_map(|el| el.value().attr("href"))
+            .filter(|url| {
+                url.starts_with("https://static.prts.wiki/widgets/") && url.ends_with(".css")
+            })
+            .map(str::to_string)
+            .collect(),
+        polyfill_urls: urls
+            .into_iter()
+            .filter(|url| {
+                url.rsplit('/')
+                    .next()
+                    .is_some_and(|file| file.starts_with("polyfills."))
+            })
+            .map(str::to_string)
+            .collect(),
+    })
+}
+
 fn nonempty_lines(text: &str) -> usize {
     text.lines().filter(|line| !line.trim().is_empty()).count()
 }
@@ -249,6 +287,21 @@ fn nonempty_lines(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovers_module_hashes_without_depending_on_legacy_markup() {
+        let html = r#"<div id="root"></div><pre id="datas_txt">story</pre>
+          <script type="module" src="https://static.prts.wiki/widgets/production/polyfills.NEW.js"></script>
+          <script type="module" src="https://static.prts.wiki/widgets/production/StoryPlayer.NEW.js"></script>
+          <link rel="stylesheet" href="https://static.prts.wiki/widgets/production/style.NEW.css">
+          <script type="module" src="https://example.invalid/StoryPlayer.BAD.js"></script>"#;
+        let bundle = extract_widget_html(html);
+        let module = bundle.module_engine.unwrap();
+        assert!(module.entry_url.ends_with("StoryPlayer.NEW.js"));
+        assert_eq!(module.polyfill_urls.len(), 1);
+        assert_eq!(module.stylesheet_urls.len(), 1);
+        assert!(bundle.engine_scripts.is_empty());
+    }
 
     #[test]
     fn extracts_future_data_blocks_and_flexible_script_tags() {
@@ -311,6 +364,14 @@ mod tests {
         };
         let html = std::fs::read_to_string(path).unwrap();
         let bundle = extract_widget_html(&html);
+        if let Some(module) = &bundle.module_engine {
+            assert!(bundle.data_block_ids.iter().any(|id| id == "datas_txt"));
+            assert!(extract_story_script_for(&html, None).is_some());
+            assert!(module
+                .entry_url
+                .starts_with("https://static.prts.wiki/widgets/"));
+            return;
+        }
         for id in [
             "datas_txt",
             "datas_back",

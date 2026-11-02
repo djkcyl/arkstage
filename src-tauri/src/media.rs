@@ -119,6 +119,10 @@ pub fn validate_asset_bytes(url: &str, bytes: &[u8]) -> Result<(), String> {
         .next()
         .unwrap_or(url)
         .to_ascii_lowercase();
+    if path.ends_with(".json") {
+        serde_json::from_slice::<serde_json::Value>(bytes)
+            .map_err(|e| format!("invalid JSON sidecar: {e}"))?;
+    }
     let image_key = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".avif"]
         .iter()
         .any(|ext| path.ends_with(ext));
@@ -174,6 +178,20 @@ fn recover_previous(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_truncated_module_sidecars_before_cache_replacement() {
+        assert!(validate_asset_bytes(
+            "https://torappu.prts.wiki/assets/avg/character.json",
+            br#"{"broken": "#
+        )
+        .is_err());
+        assert!(validate_asset_bytes(
+            "https://torappu.prts.wiki/assets/avg/character.json",
+            br#"{"valid": []}"#
+        )
+        .is_ok());
+    }
 
     #[test]
     fn maps_media_url_to_host_path() {

@@ -24,23 +24,27 @@ Android.
 
 `build-android.sh` installs the NDK and Rust targets automatically if missing.
 
-## Build (debug APK)
+## Build (release APKs)
 
 ```bash
 scripts/build-android.sh                 # both ABIs (aarch64 + x86_64)
 ABI=x86_64 scripts/build-android.sh      # emulator-only, faster
 ABI=aarch64 scripts/build-android.sh     # real-device-only
+RELEASE=0 scripts/build-android.sh       # debug APKs with on-screen console enabled
 ```
 
-The finished APK is copied to **`build/artifacts/`** (e.g.
-`app-universal-debug.apk`) and is gitignored. The script removes any stale APK
-there before building, and cleans scratch/junk before and after. It sets
-`VITE_DEBUG_DEFAULT=true`, so script-built APKs ship with the on-screen debug
-console enabled (toggle it off in Settings) — consistent with the desktop
-`build-windows*.sh` scripts.
+The finished APKs are copied to **`build/artifacts/`** and are gitignored.
+By default the script produces `app-arm64-release.apk`, `app-x86_64-release.apk`
+and `app-universal-release.apk` (both ABIs). Release APKs use the debug signing
+config unless a release keystore is supplied, so they can be installed for testing.
+The script removes stale APKs there before building and cleans scratch/junk
+before and after. Preserve any previous test packages elsewhere before running it.
+Release builds default the on-screen debug console off; enable it in Settings
+or set `VITE_DEBUG_DEFAULT=true` when building.
 
-Under the hood it runs `npm run tauri android build -- --apk --debug`, which
-runs `tauri android init` first if `src-tauri/gen/android` is missing.
+Under the hood it runs `npm run tauri android build -- --apk --target aarch64
+--target x86_64 --split-per-abi`, then builds the universal APK. `RELEASE=0` adds
+`--debug`. It runs `tauri android init` first if `src-tauri/gen/android` is missing.
 
 ### Cross-compile note (reqwest / TLS)
 

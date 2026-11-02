@@ -1,0 +1,451 @@
+{
+  "source": "Official Arknights Android client",
+  "version": "2.7.91",
+  "asset": "sharedassets1.assets",
+  "stage": [
+    1280,
+    720
+  ],
+  "sprites": {
+    "speed-1": {
+      "source": "btn_auto1x",
+      "pathId": 373,
+      "width": 30,
+      "height": 20
+    },
+    "auto": {
+      "source": "btn_auto",
+      "pathId": 374,
+      "width": 75,
+      "height": 31
+    },
+    "speed-3": {
+      "source": "btn_auto3x",
+      "pathId": 375,
+      "width": 30,
+      "height": 20
+    },
+    "log": {
+      "source": "btn_reader",
+      "pathId": 418,
+      "width": 54,
+      "height": 44
+    },
+    "settings": {
+      "source": "btn_setting",
+      "pathId": 457,
+      "width": 50,
+      "height": 48
+    },
+    "speed-frame": {
+      "source": "btn_autospeed",
+      "pathId": 494,
+      "width": 130,
+      "height": 45
+    },
+    "log-history": {
+      "source": "btn_playback",
+      "pathId": 535,
+      "width": 56,
+      "height": 54
+    },
+    "speed-2": {
+      "source": "btn_auto2x",
+      "pathId": 540,
+      "width": 30,
+      "height": 20
+    },
+    "hide": {
+      "source": "btn_hide",
+      "pathId": 570,
+      "width": 56,
+      "height": 54
+    },
+    "skip": {
+      "source": "btn_skip",
+      "pathId": 415,
+      "width": 77,
+      "height": 29
+    }
+  },
+  "layout": {
+    "btn_skip": {
+      "hierarchy": "AVGController/UICanvas/panel_static_padding/panel_avg/btn_skip",
+      "anchor": [
+        1.0,
+        1.0
+      ],
+      "position": [
+        -96.8,
+        -53.2
+      ],
+      "size": [
+        77.0,
+        29.0
+      ],
+      "pivot": [
+        0.5,
+        0.5
+      ],
+      "children": {
+        "image": {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            0.0,
+            0.0
+          ],
+          "size": [
+            0.0,
+            0.0
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ]
+        },
+        "hotspot": {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            17.0,
+            3.0
+          ],
+          "size": [
+            160.0,
+            100.0
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ]
+        }
+      }
+    },
+    "btn_auto": {
+      "hierarchy": "AVGController/UICanvas/panel_static_padding/panel_avg/btn_auto",
+      "anchor": [
+        1.0,
+        1.0
+      ],
+      "position": [
+        -220.6,
+        -53.2
+      ],
+      "size": [
+        75.0,
+        31.0
+      ],
+      "pivot": [
+        0.5,
+        0.5
+      ],
+      "children": {
+        "image": {
+          "anchor": [
+            0.0,
+            0.5
+          ],
+          "position": [
+            0.0,
+            0.0
+          ],
+          "size": [
+            60.0,
+            31.0
+          ],
+          "pivot": [
+            0.0,
+            0.5
+          ]
+        },
+        "text": {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            40.2,
+            4.1
+          ],
+          "size": [
+            67.0,
+            28.63
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ]
+        },
+        "hotspot": {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            2.1,
+            3.0
+          ],
+          "size": [
+            95.8,
+            100.0
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ]
+        }
+      }
+    },
+    "btn_speed": {
+      "hierarchy": "AVGController/UICanvas/panel_static_padding/panel_avg/btn_auto/btn_speed",
+      "anchor": [
+        1.0,
+        1.0
+      ],
+      "position": [
+        -132.5,
+        -15.5
+      ],
+      "size": [
+        71.0,
+        25.0
+      ],
+      "pivot": [
+        0.5,
+        0.5
+      ],
+      "children": {
+        "image": {
+          "anchor": [
+            0.0,
+            0.5
+          ],
+          "position": [
+            -5.5,
+            0.0
+          ],
+          "size": [
+            84.0,
+            28.0
+          ],
+          "pivot": [
+            0.0,
+            0.5
+          ]
+        },
+        "speed": {
+          "anchor": [
+            0.0,
+            0.5
+          ],
+          "position": [
+            21.5,
+            0.0
+          ],
+          "size": [
+            30.0,
+            20.0
+          ],
+          "pivot": [
+            0.0,
+            0.5
+          ]
+        },
+        "hotspot": {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            -8.2025,
+            3.0
+          ],
+          "size": [
+            113.4,
+            100.0
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ]
+        }
+      }
+    },
+    "btn_log": {
+      "hierarchy": "AVGController/UICanvas/panel_static_padding/panel_avg/btn_log",
+      "anchor": [
+        0.0,
+        1.0
+      ],
+      "position": [
+        131.7,
+        -51.1
+      ],
+      "size": [
+        56.0,
+        54.0
+      ],
+      "pivot": [
+        0.5,
+        0.5
+      ],
+      "children": {
+        "image": {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            0.0,
+            0.0
+          ],
+          "size": [
+            56.0,
+            54.0
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ]
+        },
+        "hotspot": {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            -1.18,
+            1.17
+          ],
+          "size": [
+            75.36,
+            102.35
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ]
+        }
+      }
+    },
+    "btn_hide": {
+      "hierarchy": "AVGController/UICanvas/panel_static_padding/panel_avg/btn_hide",
+      "anchor": [
+        0.0,
+        1.0
+      ],
+      "position": [
+        212.2,
+        -51.1
+      ],
+      "size": [
+        56.0,
+        54.0
+      ],
+      "pivot": [
+        0.5,
+        0.5
+      ],
+      "children": {
+        "image": {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            0.0,
+            0.0
+          ],
+          "size": [
+            56.0,
+            54.0
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ]
+        },
+        "hotspot": {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            1.91,
+            1.62
+          ],
+          "size": [
+            96.18,
+            103.25
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ]
+        }
+      }
+    },
+    "btn_setting": {
+      "hierarchy": "AVGController/UICanvas/panel_static_padding/panel_avg/btn_setting",
+      "anchor": [
+        0.0,
+        1.0
+      ],
+      "position": [
+        53.0,
+        -48.0
+      ],
+      "size": [
+        56.0,
+        54.0
+      ],
+      "pivot": [
+        0.5,
+        0.5
+      ],
+      "children": {
+        "image": {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            0.0,
+            -3.0
+          ],
+          "size": [
+            50.0,
+            48.0
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ]
+        },
+        "hotspot": {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            -2.21,
+            0.0
+          ],
+          "size": [
+            104.43,
+            100.0
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ]
+        }
+      }
+    }
+  }
+}

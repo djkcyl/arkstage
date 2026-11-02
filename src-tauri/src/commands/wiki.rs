@@ -206,6 +206,32 @@ pub async fn fetch_story_runtime(page_title: String) -> Result<StoryRuntimeData,
 fn widget_from_html(html: &str) -> Result<WidgetBundleData, String> {
     let bundle = story_page::extract_widget_html(html);
 
+    // New wiki releases publish an ESM entry and fetch their own data sidecars.
+    // They must not depend on the deprecated inline player's DOM or data tables.
+    if let Some(module) = &bundle.module_engine {
+        if !bundle.data_block_ids.iter().any(|id| id == "datas_txt") {
+            return Err("Module player is missing #datas_txt".to_string());
+        }
+        let descriptor = serde_json::to_vec(module).map_err(|e| e.to_string())?;
+        let revision = sha256_parts(&[bundle.data_blocks_html.as_bytes(), &descriptor]);
+        return Ok(WidgetBundleData {
+            dom_html: bundle.dom_html,
+            data_blocks_html: bundle.data_blocks_html,
+            engine_scripts: bundle.engine_scripts,
+            module_engine: bundle.module_engine,
+            revision,
+            diagnostics: WidgetDiagnostics {
+                data_block_ids: bundle.data_block_ids,
+                dom_element_ids: bundle.dom_element_ids,
+                background_entries: bundle.background_entries,
+                character_entries: bundle.character_entries,
+                audio_entries: bundle.audio_entries,
+                link_groups: bundle.link_groups.unwrap_or_default(),
+                ..Default::default()
+            },
+        });
+    }
+
     if bundle.engine_scripts.is_empty() {
         return Err("No engine scripts found on page".to_string());
     }
@@ -295,6 +321,7 @@ fn widget_from_html(html: &str) -> Result<WidgetBundleData, String> {
         dom_html: bundle.dom_html,
         data_blocks_html: bundle.data_blocks_html,
         engine_scripts: bundle.engine_scripts,
+        module_engine: None,
         revision,
         diagnostics: WidgetDiagnostics {
             data_block_ids: bundle.data_block_ids,
@@ -322,6 +349,14 @@ fn sha256_parts(parts: &[&[u8]]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn module_runtime_does_not_require_classic_engine_globals_or_tables() {
+        let bundle = widget_from_html(r#"<pre id="datas_txt">story</pre>
+          <script type="module" src="https://static.prts.wiki/widgets/production/StoryPlayer.test.js"></script>"#).unwrap();
+        assert!(bundle.module_engine.is_some());
+        assert!(!bundle.revision.is_empty());
+    }
 
     /// Opt-in real network smoke test:
     /// `PRTS_LIVE_NETWORK=1 cargo test live_story_runtime`.

@@ -58,11 +58,20 @@ pub struct WidgetBundleData {
     pub dom_html: String,
     pub data_blocks_html: String,
     pub engine_scripts: Vec<String>,
+    #[serde(default)]
+    pub module_engine: Option<ModuleEngine>,
     /// Content revision, independent of the source page's MediaWiki oldid.
     #[serde(default)]
     pub revision: String,
     #[serde(default)]
     pub diagnostics: WidgetDiagnostics,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModuleEngine {
+    pub entry_url: String,
+    pub stylesheet_urls: Vec<String>,
+    pub polyfill_urls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

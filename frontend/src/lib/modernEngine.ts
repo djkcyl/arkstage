@@ -1,0 +1,253 @@
+import { moduleDependencies, buildEngineModule } from "./engineModule";
+import { PROXY_BASE, proxyUrl } from "./proxy";
+import { captureIframe, pushLog } from "./debugLog";
+import type { FrameBootOptions, FrameBootResult } from "./engineBoot";
+
+export interface ModuleEngine {
+  entry_url: string;
+  stylesheet_urls: string[];
+  polyfill_urls: string[];
+}
+
+export interface PlayerController {
+  advance(): Promise<void>;
+  reset(): Promise<void>;
+  setAuto(enabled: boolean): void;
+  setSpeed(level: number): void;
+  setVolume(volume: number): void;
+  setUIVisible(visible: boolean): void;
+  skip(): Promise<void>;
+  state(): { state: string; auto: boolean; line: number | null; speed: number; canSkip: boolean };
+  dispose(): void;
+}
+
+interface NativePlayer {
+  mount(host: HTMLElement): Promise<void>;
+  start(): Promise<void>;
+  advance(): Promise<void>;
+  destroy(): void;
+  getState(): string;
+  getAutoPlayState(): { mode: string; buttonSpeedLevel: number };
+  getDisplayedLineIndex(): number | null;
+  setAutoPlayMode(mode: string): void;
+  setAutoPlaySpeedLevel(level: number): void;
+  canSkipNode(): boolean;
+  skipNode(): Promise<void>;
+  getRenderer?(): { dialogPanel?: { root?: { renderable: boolean } } };
+}
+
+interface EngineBridge {
+  loadContext(script: string): Promise<unknown>;
+  createPlayer(context: unknown): NativePlayer;
+  preload(context: unknown): Promise<void>;
+  manifest(context: unknown): string[];
+  setVolume(volume: number): void;
+}
+
+interface PreparedEngine {
+  source: string;
+  resources: string[];
+  revision: string;
+}
+
+const prepared = new Map<string, Promise<PreparedEngine>>();
+const metadataRequests = new Map<string, Promise<Response>>();
+const OFFICIAL_HOSTS = ["static.prts.wiki", "torappu.prts.wiki", "prts.wiki"];
+const localUrl = (url: string) => proxyUrl(url, OFFICIAL_HOSTS);
+
+function isEngineAsset(url: string): boolean {
+  const parsed = new URL(url);
+  return parsed.protocol === "https:" && parsed.hostname === "static.prts.wiki"
+    && parsed.pathname.startsWith("/widgets/");
+}
+
+function prepareEngine(descriptor: ModuleEngine): Promise<PreparedEngine> {
+  const key = JSON.stringify(descriptor);
+  let promise = prepared.get(key);
+  if (!promise) {
+    promise = (async () => {
+      if (!isEngineAsset(descriptor.entry_url)) throw new Error("PRTS 模块入口来源无效");
+      const sources = new Map<string, string>();
+      const resources = new Set<string>(descriptor.stylesheet_urls);
+      const waiting = [descriptor.entry_url, ...descriptor.polyfill_urls];
+      let bytes = 0;
+      while (waiting.length) {
+        const batch = [...new Set(waiting.splice(0))].filter((url) => !sources.has(url));
+        if (sources.size + batch.length > 128) throw new Error("PRTS 模块依赖数量异常");
+        const loaded = await Promise.all(batch.map(async (url) => {
+          if (!isEngineAsset(url)) throw new Error(`PRTS 模块依赖来源无效: ${url}`);
+          const response = await fetch(localUrl(url));
+          if (!response.ok) throw new Error(`PRTS 模块加载失败 (${response.status}): ${url}`);
+          const source = await response.text();
+          if (!source.trim() || /^\s*</.test(source)) throw new Error(`PRTS 返回了无效模块: ${url}`);
+          bytes += source.length;
+          if (bytes > 32 * 1024 * 1024) throw new Error("PRTS 模块依赖体积异常");
+          return { url, source };
+        }));
+        for (const { url, source } of loaded) {
+          sources.set(url, source);
+          resources.add(url);
+          waiting.push(...moduleDependencies(source, url).filter((url) => /\.m?js(?:[?#]|$)/.test(url)));
+        }
+      }
+      const source = buildEngineModule(sources.get(descriptor.entry_url)!, descriptor.entry_url, sources, localUrl);
+      const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode([...sources.values()].join("\n")));
+      const revision = [...new Uint8Array(hash)].map((n) => n.toString(16).padStart(2, "0")).join("");
+      return { source, resources: [...resources], revision };
+    })();
+    prepared.set(key, promise);
+    void promise.catch(() => { if (prepared.get(key) === promise) prepared.delete(key); });
+  }
+  return promise;
+}
+
+/** Include fresh sidecar contents in manifest cache identity, not just wiki oldid. */
+export async function modernEngineRevision(descriptor: ModuleEngine): Promise<string> {
+  const runtime = await prepareEngine(descriptor);
+  const metadata = await Promise.all([...metadataRequests.entries()].sort(([a], [b]) => a.localeCompare(b))
+    .map(async ([url, response]) => `${url}:${await (await response).clone().text()}`));
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(runtime.revision + metadata.join("\n")));
+  return [...new Uint8Array(hash)].map((n) => n.toString(16).padStart(2, "0")).join("");
+}
+
+function metadataResponse(url: string): Promise<Response> {
+  let promise = metadataRequests.get(url);
+  if (!promise) {
+    const local = new URL(localUrl(url));
+    local.searchParams.set("arkstage-refresh", "1");
+    promise = fetch(local.href).then(async (response) => {
+      if (!response.ok) throw new Error(`PRTS 数据表加载失败 (${response.status}): ${url}`);
+      await response.clone().json();
+      return response;
+    });
+    metadataRequests.set(url, promise);
+    void promise.catch(() => { if (metadataRequests.get(url) === promise) metadataRequests.delete(url); });
+  }
+  return promise.then((response) => response.clone());
+}
+
+function installRouting(win: Window & typeof globalThis, metadata: Set<string>): void {
+  const route = (url: string) => /^https?:\/\//.test(url) ? localUrl(url) : url;
+  const nativeFetch = win.fetch.bind(win);
+  win.fetch = async (input, init) => {
+    const isRequest = typeof input === "object" && "url" in input;
+    const url = typeof input === "string" ? input : isRequest ? input.url : String(input);
+    if (/^https:\/\/(static|torappu)\.prts\.wiki\/.*\.json(?:[?#]|$)/.test(url)) {
+      metadata.add(url);
+      const response = await metadataResponse(url);
+      return new win.Response(await response.arrayBuffer(), { status: response.status, headers: response.headers });
+    }
+    return nativeFetch(isRequest ? new win.Request(route(url), input) : route(url), init);
+  };
+  const nativeOpen = win.XMLHttpRequest.prototype.open;
+  win.XMLHttpRequest.prototype.open = function (method: string, url: string | URL, async: boolean = true, username?: string | null, password?: string | null) {
+    nativeOpen.call(this, method, route(String(url)), async, username ?? null, password ?? null);
+  };
+  for (const proto of [win.HTMLImageElement.prototype, win.HTMLMediaElement.prototype, win.HTMLSourceElement.prototype]) {
+    const descriptor = Object.getOwnPropertyDescriptor(proto, "src");
+    if (!descriptor?.set) continue;
+    Object.defineProperty(proto, "src", {
+      ...descriptor,
+      set(value: string) { descriptor.set!.call(this, route(value)); },
+    });
+  }
+  const nativeSetAttribute = win.Element.prototype.setAttribute;
+  win.Element.prototype.setAttribute = function (key, value) {
+    nativeSetAttribute.call(this, key, ["src", "href"].includes(key) ? route(value) : value);
+  };
+  const NativeFontFace = win.FontFace;
+  win.FontFace = class extends NativeFontFace {
+    constructor(family: string, source: string | BufferSource, descriptors?: FontFaceDescriptors) {
+      super(family, typeof source === "string"
+        ? source.replace(/https?:\/\/[^\s"'()]+/g, route) : source, descriptors);
+    }
+  };
+}
+
+export async function bootModernEngineInFrame(opts: FrameBootOptions): Promise<FrameBootResult> {
+  const descriptor = opts.bundle.module_engine!;
+  const runtime = await prepareEngine(descriptor);
+  if (opts.isCancelled?.()) return {};
+  const win = opts.iframe.contentWindow as Window & typeof globalThis;
+  const doc = opts.iframe.contentDocument;
+  if (!win || !doc) throw new Error("PRTS 模块播放器容器不可用");
+  doc.open();
+  doc.write('<!doctype html><html><head><meta charset="utf-8"><style>html,body,#arkstage-stage{margin:0;width:100%;height:100%;overflow:hidden;background:#000}#arkstage-stage{position:relative}canvas{display:block}</style></head><body><div id="arkstage-stage"></div></body></html>');
+  doc.close();
+  // Some shared wiki modules read these optional MediaWiki settings at import.
+  Object.assign(win, { mw: { config: { get: () => null, values: { wgUserGroups: [] } } } });
+  captureIframe(win);
+  const metadata = new Set<string>();
+  installRouting(win, metadata);
+  const imports = doc.createElement("script");
+  imports.type = "importmap";
+  imports.textContent = JSON.stringify({ imports: Object.fromEntries(OFFICIAL_HOSTS.map((host) => [`https://${host}/`, `${PROXY_BASE}/${host}/`])) });
+  doc.head.append(imports);
+  for (const url of descriptor.stylesheet_urls) {
+    const link = doc.createElement("link");
+    link.rel = "stylesheet";
+    link.href = localUrl(url);
+    doc.head.append(link);
+  }
+  const importModule = (url: string) => win.eval(`import(${JSON.stringify(url)})`) as Promise<{ arkstageEngine: EngineBridge }>;
+  for (const url of descriptor.polyfill_urls) await importModule(localUrl(url));
+  const blob = win.URL.createObjectURL(new win.Blob([runtime.source], { type: "text/javascript" }));
+  let bridge: EngineBridge;
+  try { bridge = (await importModule(blob)).arkstageEngine; }
+  finally { win.URL.revokeObjectURL(blob); }
+  const nickname = localStorage.getItem("prts-nickname") || "博士";
+  const script = opts.script.replaceAll("{@nickname}", nickname);
+  const context = await bridge.loadContext(script);
+  const urls = bridge.manifest(context);
+  const manifest = [...new Set([...runtime.resources, ...metadata, ...urls])].filter((url) => /^https?:\/\//.test(url));
+  if (!urls.length) throw new Error("PRTS 新版引擎未生成资源清单");
+  const health = { globals: ["createStoryPlayer", "loadContextByScript", "collectPreloadAssetUrls", "preloadContextAssets"], engineScriptCount: runtime.resources.length, assetDomains: OFFICIAL_HOSTS };
+  pushLog("info", `[module-engine] ${opts.title}: ${manifest.length} assets; entry=${descriptor.entry_url}`);
+  if (opts.mode === "manifest") return { manifest, health };
+  await bridge.preload(context);
+  if (opts.isCancelled?.()) return {};
+  const host = doc.getElementById("arkstage-stage")!;
+  let player = bridge.createPlayer(context);
+  await player.mount(host);
+  let uiVisible = true;
+  const controller: PlayerController = {
+    async advance() {
+      host.querySelector("[data-start-prompt]")?.remove();
+      await (player.getState() === "idle" ? player.start() : player.advance());
+    },
+    async reset() {
+      host.removeEventListener("click", onClick);
+      player.destroy(); host.replaceChildren(); player = bridge.createPlayer(context); await player.mount(host);
+      host.addEventListener("click", onClick);
+      showStartPrompt();
+    },
+    setAuto(enabled) { player.setAutoPlayMode(enabled ? "button_auto" : "default"); },
+    setSpeed(level) { player.setAutoPlaySpeedLevel(level); },
+    setVolume(volume) { bridge.setVolume(Math.min(1, Math.max(0, volume))); },
+    setUIVisible(visible) {
+      uiVisible = visible;
+      const panel = player.getRenderer?.()?.dialogPanel?.root;
+      if (panel) panel.renderable = visible;
+    },
+    async skip() { if (player.canSkipNode()) await player.skipNode(); },
+    state() { return { state: player.getState(), auto: player.getAutoPlayState().mode !== "default", line: player.getDisplayedLineIndex(), speed: player.getAutoPlayState().buttonSpeedLevel + 1, canSkip: player.canSkipNode() }; },
+    dispose() { host.removeEventListener("click", onClick); player.destroy(); },
+  };
+  const onClick = () => {
+    if (!uiVisible) { controller.setUIVisible(true); return; }
+    void controller.advance().catch((error) => pushLog("error", "[module-engine] advance failed", error));
+  };
+  host.addEventListener("click", onClick);
+  host.tabIndex = 0;
+  host.addEventListener("keydown", (event) => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); onClick(); } });
+  function showStartPrompt() {
+    const prompt = host.ownerDocument.createElement("button");
+    prompt.dataset.startPrompt = "";
+    prompt.textContent = "点击开始剧情回顾";
+    prompt.style.cssText = "position:absolute;inset:40% 20%;border:0;background:#000b;color:#fff;font-size:20px;cursor:pointer";
+    prompt.addEventListener("click", () => prompt.remove(), { once: true });
+    host.append(prompt);
+  }
+  showStartPrompt();
+  return { health, controller };
+}

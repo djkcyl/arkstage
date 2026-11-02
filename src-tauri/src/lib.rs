@@ -21,6 +21,32 @@ fn respond_err(responder: tauri::UriSchemeResponder, status: u16, msg: String) {
     responder.respond(r);
 }
 
+fn respond_asset(responder: tauri::UriSchemeResponder, bytes: Vec<u8>, path: &str, fallback: bool) {
+    let response = tauri::http::Response::builder()
+        .status(200)
+        .header("Content-Type", sniff_content_type(&bytes, path))
+        .header("Access-Control-Allow-Origin", "*")
+        .header("X-PRTS-Cache-Fallback", if fallback { "1" } else { "0" })
+        .header("Access-Control-Expose-Headers", "X-PRTS-Cache-Fallback")
+        .body(bytes)
+        .unwrap();
+    responder.respond(response);
+}
+
+fn respond_or_fallback(
+    responder: tauri::UriSchemeResponder,
+    status: u16,
+    msg: String,
+    cached: Option<Vec<u8>>,
+    path: &str,
+) {
+    if let Some(bytes) = cached {
+        respond_asset(responder, bytes, path, true);
+    } else {
+        respond_err(responder, status, msg);
+    }
+}
+
 /// Content-type from the file's magic bytes, falling back to the extension. Needed
 /// because the compression feature stores WebP bytes under the original `.png`
 /// key, so the extension can lie. `<img>` sniffs anyway, but a correct header is
@@ -112,17 +138,23 @@ pub fn run() {
             let media_root = media::media_root(&data_root::data_root());
 
             // 1) Serve from local content-addressed store if present (offline).
-            if let Some(bytes) = media::read_local_validated(&media_root, &target_url) {
-                // Sniff: a `.png` key may hold WebP bytes after compression.
-                let ct = sniff_content_type(&bytes, path);
-                let r = tauri::http::Response::builder()
-                    .status(200)
-                    .header("Content-Type", ct)
-                    .header("Access-Control-Allow-Origin", "*")
-                    .body(bytes)
-                    .unwrap();
-                responder.respond(r);
-                return;
+            let cached = media::read_local_validated(&media_root, &target_url);
+            let refresh = uri
+                .query()
+                .is_some_and(|q| q.split('&').any(|part| part == "arkstage-refresh=1"));
+            if !refresh || !net::allow_online() {
+                if let Some(bytes) = cached {
+                    // Sniff: a `.png` key may hold WebP bytes after compression.
+                    let ct = sniff_content_type(&bytes, path);
+                    let r = tauri::http::Response::builder()
+                        .status(200)
+                        .header("Content-Type", ct)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(bytes)
+                        .unwrap();
+                    responder.respond(r);
+                    return;
+                }
             }
 
             // 2) Not cached and offline mode: refuse with a marker the frontend detects.
@@ -154,19 +186,19 @@ pub fn run() {
                             Ok(bytes) => {
                                 if let Err(error) = media::validate_asset_bytes(&target_url, &bytes)
                                 {
-                                    respond_err(
+                                    respond_or_fallback(
                                         responder,
                                         502,
                                         format!("Invalid upstream asset: {error}"),
+                                        cached,
+                                        path,
                                     );
                                     return;
                                 }
                                 // Real-time compression: when a tier is enabled and
                                 // this is an image, store + serve the WebP bytes.
-                                let stored = compress::maybe_transcode_image(
-                                    &target_url,
-                                    bytes.to_vec(),
-                                );
+                                let stored =
+                                    compress::maybe_transcode_image(&target_url, bytes.to_vec());
                                 let _ = media::write_local(&media_root, &target_url, &stored);
                                 let ct = sniff_content_type(&stored, path);
                                 let r = tauri::http::Response::builder()
@@ -177,14 +209,32 @@ pub fn run() {
                                     .unwrap();
                                 responder.respond(r);
                             }
-                            Err(e) => respond_err(responder, 502, format!("Read error: {}", e)),
+                            Err(e) => respond_or_fallback(
+                                responder,
+                                502,
+                                format!("Read error: {}", e),
+                                cached,
+                                path,
+                            ),
                         }
                     }
                     Ok(resp) => {
                         let status = resp.status().as_u16();
-                        respond_err(responder, status, format!("Upstream returned {}", status));
+                        respond_or_fallback(
+                            responder,
+                            status,
+                            format!("Upstream returned {}", status),
+                            cached,
+                            path,
+                        );
                     }
-                    Err(e) => respond_err(responder, 502, format!("Fetch error: {}", e)),
+                    Err(e) => respond_or_fallback(
+                        responder,
+                        502,
+                        format!("Fetch error: {}", e),
+                        cached,
+                        path,
+                    ),
                 }
             });
         })
@@ -202,7 +252,9 @@ pub fn run() {
                         data_root::init_fixed(dir);
                     }
                     Err(e) => {
-                        log::warn!("[data_root] external dir unavailable ({e}); using internal app_data");
+                        log::warn!(
+                            "[data_root] external dir unavailable ({e}); using internal app_data"
+                        );
                         if let Ok(dir) = app.path().app_data_dir() {
                             data_root::init_fixed(dir);
                         }

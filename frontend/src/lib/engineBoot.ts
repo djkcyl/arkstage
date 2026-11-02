@@ -1,6 +1,8 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { PROXY_BASE, discoverAssetDomains, proxyUrl, rewriteAllCdnUrls } from "./proxy";
 import { captureIframe, pushLog } from "./debugLog";
+import { installEngineCompatibility } from "./engineCompatibility";
+import { bootModernEngineInFrame, type ModuleEngine, type PlayerController } from "./modernEngine";
 import { scenarioLinkOverrides, type ScenarioLinkOverride } from "./BookshelfMetadataContext";
 
 /**
@@ -20,6 +22,7 @@ export interface WidgetBundle {
   dom_html: string;
   data_blocks_html: string;
   engine_scripts: string[];
+  module_engine?: ModuleEngine | null;
   revision?: string;
   diagnostics?: {
     data_block_ids: string[];
@@ -52,6 +55,7 @@ export interface FrameBootResult {
   manifest?: string[];
   audit?: ScenarioAudit;
   health?: EngineHealth;
+  controller?: PlayerController;
 }
 
 export interface EngineHealth {
@@ -115,6 +119,7 @@ export function refreshEngineDeps(): Promise<string> {
 }
 
 export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBootResult> {
+  if (opts.bundle.module_engine) return bootModernEngineInFrame(opts);
   const { iframe, bundle, script, title, mode } = opts;
   const isCancelled = opts.isCancelled ?? (() => false);
   const play = mode === "play";
@@ -193,6 +198,7 @@ export async function bootEngineInFrame(opts: FrameBootOptions): Promise<FrameBo
   if (isCancelled()) return {};
   await loadScriptInDoc(idoc, await resolveAssetUrl(EXTERNALS.toolbox));
   if (isCancelled()) return {};
+  installEngineCompatibility(iwin);
   assertExternalDepsReady(iwin, depsRevision);
 
   // === Execute engine scripts (defines data/system/queue/fun_sys_preload, runs fun_sys_init) ===
