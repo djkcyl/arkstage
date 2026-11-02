@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "11f54093a47ad044dae8",
+  "version": "17a0cd5c033f5dfc8898",
   "storylines": [
     [
       "为了明日",
@@ -40,7 +40,8 @@
       "燎原",
       [
         "乌萨斯的孩子们",
-        "人们，我们"
+        "人们，我们",
+        "时间啊，向前！"
       ]
     ],
     [
@@ -106,7 +107,8 @@
         "覆潮之下",
         "愚人号",
         "生路",
-        "出苍白海"
+        "出苍白海",
+        "昨日海"
       ]
     ],
     [
@@ -166,7 +168,8 @@
         "水晶箭行动",
         "泰拉饭",
         "无忧梦呓",
-        "泡影苍霆"
+        "泡影苍霆",
+        "月行水上"
       ]
     ]
   ],
@@ -376,10 +379,25 @@
       "width": 420,
       "height": 376
     },
+    "时间啊，向前！": {
+      "path": "covers/3b35e58db162b5a3d4b7.webp",
+      "width": 420,
+      "height": 303
+    },
     "春分": {
       "path": "covers/cdd245db17e27efdf1b3.webp",
       "width": 420,
       "height": 376
+    },
+    "昨日海": {
+      "path": "covers/77d0cb7e6f93bcaa9f9c.webp",
+      "width": 420,
+      "height": 303
+    },
+    "月行水上": {
+      "path": "covers/1f8db9406eae54697ccb.webp",
+      "width": 480,
+      "height": 154
     },
     "未尽篇章": {
       "path": "covers/f5b30d12e3c6fa351f37.webp",
@@ -823,8 +841,23 @@
       "width": 560,
       "height": 179
     },
+    "时间啊，向前！": {
+      "path": "banners/7c02a89dfefce547e7cd.webp",
+      "width": 560,
+      "height": 179
+    },
     "春分": {
       "path": "banners/c52019bdd2ee24a9d828.webp",
+      "width": 560,
+      "height": 179
+    },
+    "昨日海": {
+      "path": "banners/64244feaafceb43bebd6.webp",
+      "width": 560,
+      "height": 179
+    },
+    "月行水上": {
+      "path": "banners/6eb63f44fa0b452f984d.webp",
       "width": 560,
       "height": 179
     },
