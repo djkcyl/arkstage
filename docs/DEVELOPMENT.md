@@ -16,6 +16,7 @@ resources@GitHub ─jsDelivr/GitHub Raw─▶ 书架元数据/封面    图片�
 - **书架资源**不进入安装包：`BookshelfMetadataContext` 先读 `cache/bookshelf-metadata.json`，每次启动再以 `cache: no-store` 刷新 jsDelivr；网络或格式失败则自动改走 `raw.githubusercontent.com`。只有通过完整校验的响应才会覆盖内存和缓存；双线路都失败时保留旧缓存并显示可重试提示。封面/横幅同样在首选源加载失败后切换另一源，使用哈希文件名并经 `prts-cdn://` 懒加载到内容寻址缓存，因此离线可复用，更新分类或封面无需发版。
 - **PRTS 演出运行时**使用同页原子快照：从同一个响应提取剧情脚本与模块入口，校验并通过隔离启动测试后写入 `story-runtime-v6`，保留上一代快照供失败回滚。`engineModule.ts` 使用 Acorn 按语法结构发现播放器、上下文和预加载 API，不固定上游哈希文件名或压缩变量名；删除入口中的外置 Vue UI 挂载，只桥接演出引擎。无哈希的角色、背景和变量 JSON 每次启动刷新，离线或无效响应回退本地缓存；模块和数据指纹一同决定清单是否失效。Pixi 使用当前 iframe 的资源加载器，使媒体、字体和模块均经过本地协议缓存。
 - **顶部覆盖层**由 `PlayerHUD.tsx` 提供，按游戏的 1280×720 舞台比例缩放，使用客户端 AVG 按钮图标、角点锚定坐标和触摸热区；不挂载 PRTS 的外置工具栏。设置、日志、隐藏、速度、自动与跳过调用原引擎控制器。`tools/extract-player-ui.py` 可从官方 APK 复现导出，依赖 UnityPy 1.25.4 和 Pillow；产物来源见 `frontend/src/assets/player-ui/README.md`。
+- **比例与输入**：原版逻辑画布固定为 1280×720，宿主舞台按 16:9 等比居中，宽屏/竖屏留黑边，HUD 与画布共享相同位置和缩放，禁止分别撑满宽高。手动显示“手动”并隐藏倍速框，开启自动后才显示“自动”和速度框。长按场景 350ms 或按住 Ctrl 调用原引擎最高档 `quick_play`；松开、取消触摸、拖动、失焦或离开页面均释放，恢复此前模式与自动速度，并吞掉长按后的额外点击。快进保留选项等待，释放后也不会因选项缓存恢复而继续快进。
 - **移动端稳定性**：桥接层将上游优先 WebGPU 的画布改为 WebGL，关闭 MSAA，初始和旋转/缩放后的渲染分辨率均限制在 1.5 倍以内。剧情清单仍包含全部音频；播放初始化不提前解码整章音频，而由原音频引擎按需加载，图片按两项一批预热，减少解码峰值。
 - **崩溃诊断**：前端环形日志与播放阶段同步保留到本地存储，关键阶段等待 Rust `logs/diagnostics.log` 落盘后才进入 GPU/解码路径；发布版同样启用原生日志。Android 捕获 Java 未处理异常、WebView 渲染进程终止及 API 30+ 历史进程退出原因。渲染进程终止后展示原生导出界面，避免默认处理连带杀死宿主；重启后可在设置或自动打开的恢复日志中复制/导出完整诊断。日志轮换限制大小，不依赖用户提前开启控制台。
 - **外部依赖兼容**：每个引擎 iframe 加载 toolbox 后执行 `installEngineCompatibility`，补齐新版工具库删掉、但音频 `fade()` 仍调用的 `Math.clamp`。已有实现保留，兼容补丁不修改应用主窗口。使用 `npm run test:engine` 回归验证；设置 `PRTS_TOOLBOX_FIXTURE=/path/to/krliov.toolbox.js` 可直接校验下载的上游工具库。
@@ -66,6 +67,7 @@ npm run test:metadata  # 书架元数据校验与 jsDelivr → GitHub 回退单�
 npm run test:engine    # 演出工具库兼容与音频淡出回归测试
 npm run test:modules   # ESM 依赖解析、动态 API 桥接和外置 UI 隔离
 npm run test:diagnostics # 进程重启后的日志与检查点恢复、日志大小限制
+npm run test:playback  # 手动/自动、临时快进恢复和选项等待
 
 # —— 仅后端（Rust / Tauri）——
 cargo test  --manifest-path src-tauri/Cargo.toml   # 后端单元测试

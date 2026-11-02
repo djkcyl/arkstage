@@ -6,6 +6,8 @@
 .reader-hud button:focus-visible { outline: 2px solid #e8c77b; outline-offset: -3px; }
 .reader-hud button:disabled { opacity: .4; cursor: default; }
 .reader-hud img { position: absolute; object-fit: contain; pointer-events: none; }
+.reader-manual-label { position: absolute; display: flex; align-items: center; justify-content: center; font-size: 28px; line-height: 31px; white-space: nowrap; pointer-events: none; }
+.reader-fast-forward { position: absolute; top: 15%; left: 50%; transform: translateX(-50%); padding: 5px 12px; background: #0008; font-size: 16px; white-space: nowrap; }
 .reader-auto[aria-pressed="true"] img { filter: sepia(.5) saturate(1.5); }
 .reader-reveal { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; pointer-events: auto; cursor: pointer; }
 .reader-dialog-backdrop { position: absolute; inset: 0; display: grid; place-items: center; background: #0009; pointer-events: auto; }

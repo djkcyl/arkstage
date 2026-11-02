@@ -89,16 +89,17 @@ export default function PlayerHUD({ controller, script, onExit, onError }: {
         <button className="reader-icon reader-settings" style={hitbox("btn_setting")} aria-label="剧情设置" title="设置" onClick={() => open("settings")}><img src={settingsIcon} style={graphic("btn_setting", 40, 40, 0, 3)} alt="" /></button>
         <button className="reader-icon reader-log" style={hitbox("btn_log")} aria-label="剧情日志" title="LOG" onClick={() => { setAllText(false); open("log"); }}><img src={logIcon} style={graphic("btn_log", 44, 44)} alt="" /></button>
         <button className="reader-icon reader-hide" style={hitbox("btn_hide")} aria-label="隐藏剧情界面" title="隐藏界面" onClick={() => { controller.setUIVisible(false); setHidden(true); }}><img src={hideIcon} style={graphic("btn_hide", 44, 44)} alt="" /></button>
-        <button className="reader-speed" style={hitbox("btn_speed")} aria-label="切换播放速度" title={`自动播放速度 ${state.speed} 倍`} onClick={() => controller.setSpeed(controller.state().speed % 3)}>
+        {state.auto && <button className="reader-speed" style={hitbox("btn_speed")} aria-label="切换播放速度" title={`自动播放速度 ${state.speed} 倍`} onClick={() => controller.setSpeed(controller.state().speed % 3)}>
           <img src={speedFrame} style={graphic("btn_speed", 84, 28, 1, 0)} alt="" />
           <img src={[speedOne, speedTwo, speedThree][state.speed - 1] ?? speedOne} style={graphic("btn_speed", 30, 20, 1, 0)} alt="" />
-        </button>
-        <button className="reader-auto" style={hitbox("btn_auto")} aria-label="自动播放" aria-pressed={state.auto} onClick={() => {
+        </button>}
+        <button className="reader-auto" style={hitbox("btn_auto")} aria-label="播放模式" title={state.auto ? "自动播放，点击切换手动" : "手动播放，点击开启自动"} aria-pressed={state.auto} onClick={() => {
           controller.setAuto(!controller.state().auto);
           if (controller.state().state === "idle") run(() => controller.advance());
-        }}><img src={autoIcon} style={graphic("btn_auto", 75, 31)} alt="" /></button>
+        }}>{state.auto ? <img src={autoIcon} style={graphic("btn_auto", 75, 31)} alt="自动" /> : <span className="reader-manual-label" style={graphic("btn_auto", 75, 31)}>手动</span>}</button>
         <button className="reader-skip" style={hitbox("btn_skip")} aria-label="跳过剧情" disabled={!state.canSkip} onClick={() => open("skip")}><img src={skipIcon} style={graphic("btn_skip", 77, 29)} alt="" /></button>
       </nav>
+      {state.fastForward && <div className="reader-fast-forward" role="status">快进中 ▶▶</div>}
       {state.state === "finished" && <button className="reader-finished" onClick={onExit}>剧情结束 · 返回书架</button>}
     </>}
 

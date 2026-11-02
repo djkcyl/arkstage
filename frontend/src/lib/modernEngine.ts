@@ -2,6 +2,8 @@ import { moduleDependencies, buildEngineModule } from "./engineModule";
 import { PROXY_BASE, proxyUrl } from "./proxy";
 import { captureIframe, pushLog, playbackCheckpoint } from "./debugLog";
 import type { FrameBootOptions, FrameBootResult } from "./engineBoot";
+import { createPlaybackModes } from "./playbackModes";
+import { bindSceneInput } from "./playerInput";
 
 export interface ModuleEngine {
   entry_url: string;
@@ -13,11 +15,12 @@ export interface PlayerController {
   advance(): Promise<void>;
   reset(): Promise<void>;
   setAuto(enabled: boolean): void;
+  setFastForward(enabled: boolean): boolean;
   setSpeed(level: number): void;
   setVolume(volume: number): void;
   setUIVisible(visible: boolean): void;
   skip(): Promise<void>;
-  state(): { state: string; auto: boolean; line: number | null; speed: number; canSkip: boolean };
+  state(): { state: string; auto: boolean; fastForward: boolean; line: number | null; speed: number; canSkip: boolean };
   dispose(): void;
 }
 
@@ -33,7 +36,11 @@ interface NativePlayer {
   setAutoPlaySpeedLevel(level: number): void;
   canSkipNode(): boolean;
   skipNode(): Promise<void>;
-  getRenderer?(): { dialogPanel?: { root?: { renderable: boolean } } };
+  onDisplayedLineChange?(listener: (line: number | null) => void): () => void;
+  getRenderer?(): {
+    dialogPanel?: { root?: { renderable: boolean } };
+    app?: { renderer: { events: { mapPositionToPoint(point: { x: number; y: number }, x: number, y: number): void; rootBoundary: { hitTest(x: number, y: number): unknown } } } };
+  };
 }
 
 interface EngineBridge {
@@ -176,7 +183,7 @@ export async function bootModernEngineInFrame(opts: FrameBootOptions): Promise<F
   const doc = opts.iframe.contentDocument;
   if (!win || !doc) throw new Error("PRTS 模块播放器容器不可用");
   doc.open();
-  doc.write('<!doctype html><html><head><meta charset="utf-8"><style>html,body,#arkstage-stage{margin:0;width:100%;height:100%;overflow:hidden;background:#000}#arkstage-stage{position:relative}canvas{display:block}</style></head><body><div id="arkstage-stage"></div></body></html>');
+  doc.write('<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}body{display:flex;align-items:center;justify-content:center}#arkstage-stage{position:relative;width:min(100vw,calc(100vh * 16 / 9));height:min(100vh,calc(100vw * 9 / 16));overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}canvas{display:block}</style></head><body><div id="arkstage-stage"></div></body></html>');
   doc.close();
   // Some shared wiki modules read these optional MediaWiki settings at import.
   Object.assign(win, { mw: { config: { get: () => null, values: { wgUserGroups: [] } } } });
@@ -239,6 +246,8 @@ export async function bootModernEngineInFrame(opts: FrameBootOptions): Promise<F
   };
   let removeContextListener = watchContext();
   let uiVisible = true;
+  let modes = createPlaybackModes(player);
+  let releaseLineListener = player.onDisplayedLineChange?.(() => modes.reconcile());
   const controller: PlayerController = {
     async advance() {
       host.querySelector("[data-start-prompt]")?.remove();
@@ -246,36 +255,53 @@ export async function bootModernEngineInFrame(opts: FrameBootOptions): Promise<F
     },
     async reset() {
       await checkpoint("reset");
+      input.cancel();
+      releaseLineListener?.();
       removeContextListener();
-      host.removeEventListener("click", onClick);
-      player.destroy(); host.replaceChildren(); player = bridge.createPlayer(context); await player.mount(host);
-      host.addEventListener("click", onClick);
+      player.destroy(); host.replaceChildren(); player = bridge.createPlayer(context);
+      modes = createPlaybackModes(player);
+      await player.mount(host);
+      releaseLineListener = player.onDisplayedLineChange?.(() => modes.reconcile());
       removeContextListener = watchContext();
       showStartPrompt();
     },
-    setAuto(enabled) { player.setAutoPlayMode(enabled ? "button_auto" : "default"); },
+    setAuto(enabled) { input.cancel(); modes.setAuto(enabled); },
+    setFastForward(enabled) { return modes.setFastForward(enabled); },
     setSpeed(level) { player.setAutoPlaySpeedLevel(level); },
     setVolume(volume) { bridge.setVolume(Math.min(1, Math.max(0, volume))); },
     setUIVisible(visible) {
       uiVisible = visible;
+      if (!visible) input.cancel();
       const panel = player.getRenderer?.()?.dialogPanel?.root;
       if (panel) panel.renderable = visible;
     },
     async skip() { if (player.canSkipNode()) await player.skipNode(); },
-    state() { return { state: player.getState(), auto: player.getAutoPlayState().mode !== "default", line: player.getDisplayedLineIndex(), speed: player.getAutoPlayState().buttonSpeedLevel + 1, canSkip: player.canSkipNode() }; },
+    state() { return { state: player.getState(), ...modes.state(), line: player.getDisplayedLineIndex(), canSkip: player.canSkipNode() }; },
     dispose() {
       void playbackCheckpoint(opts.title, "disposed");
+      input.dispose(); releaseLineListener?.();
       removeContextListener();
-      host.removeEventListener("click", onClick); player.destroy();
+      player.destroy();
     },
   };
   const onClick = () => {
     if (!uiVisible) { controller.setUIVisible(true); return; }
     void controller.advance().catch((error) => pushLog("error", "[module-engine] advance failed", error));
   };
-  host.addEventListener("click", onClick);
+  const input = bindSceneInput(host, {
+    advance: onClick,
+    setFastForward: (enabled) => controller.setFastForward(enabled),
+    canHold: () => uiVisible && !opts.iframe.ownerDocument.querySelector('[aria-modal="true"]'),
+    isClaimed: (x, y) => {
+      if (player.getState() === "waiting_decision") return true;
+      const events = player.getRenderer?.()?.app?.renderer.events;
+      if (!events) return false;
+      const point = { x: 0, y: 0 };
+      events.mapPositionToPoint(point, x, y);
+      return !!events.rootBoundary.hitTest(point.x, point.y);
+    },
+  });
   host.tabIndex = 0;
-  host.addEventListener("keydown", (event) => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); onClick(); } });
   function showStartPrompt() {
     const prompt = host.ownerDocument.createElement("button");
     prompt.dataset.startPrompt = "";

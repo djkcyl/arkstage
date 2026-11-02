@@ -9,6 +9,7 @@ echo "==> [1/6] engine compatibility tests"
 npm run test:engine
 npm run test:modules
 npm run test:diagnostics
+npm run test:playback
 
 echo "==> [2/6] bookshelf metadata fallback tests"
 npm run test:metadata

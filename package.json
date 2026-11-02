@@ -1,7 +1,7 @@
 {
   "name": "arkstage",
   "private": true,
-  "version": "1.1.9",
+  "version": "1.1.10",
   "type": "module",
   "scripts": {
     "dev": "vite frontend",
@@ -11,6 +11,7 @@
     "test:engine": "tsc frontend/src/lib/engineCompatibility.ts --target ES2023 --module ESNext --lib ES2023,DOM --skipLibCheck --outDir build/test && node --test frontend/src/lib/engineCompatibility.test.mjs",
     "test:modules": "tsc frontend/src/lib/engineModule.ts --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,DOM --skipLibCheck --outDir build/test && node --test frontend/src/lib/engineModule.test.mjs",
     "test:diagnostics": "tsc frontend/src/lib/debugLog.ts --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,DOM --skipLibCheck --outDir build/test && node --test frontend/src/lib/debugLog.test.mjs",
+    "test:playback": "tsc frontend/src/lib/playbackModes.ts --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,DOM --skipLibCheck --outDir build/test && node --test frontend/src/lib/playbackModes.test.mjs",
     "verify:prts-sync": "node scripts/verify-prts-sync.mjs",
     "preview": "vite preview frontend",
     "tauri": "tauri",
