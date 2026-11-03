@@ -1,7 +1,8 @@
 {
   "name": "arkstage",
   "private": true,
-  "version": "1.1.11",
+  "license": "AGPL-3.0-only",
+  "version": "1.1.12",
   "type": "module",
   "scripts": {
     "dev": "vite frontend",
@@ -13,6 +14,8 @@
     "test:diagnostics": "tsc frontend/src/lib/debugLog.ts --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,DOM --skipLibCheck --outDir build/test && node --test frontend/src/lib/debugLog.test.mjs",
     "test:playback": "tsc frontend/src/lib/playbackModes.ts --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,DOM --skipLibCheck --outDir build/test && node --test frontend/src/lib/playbackModes.test.mjs",
     "test:transcript": "tsc frontend/src/lib/playerTranscript.ts frontend/src/lib/uiSettings.ts --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,DOM --skipLibCheck --outDir build/test && node --test frontend/src/lib/playerTranscript.test.mjs",
+    "test:cache": "tsc frontend/src/lib/engineCache.ts --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,DOM --skipLibCheck --outDir build/test && node --test frontend/src/lib/engineCache.test.mjs",
+    "test:resources": "node --test tools/build-resources/sync-resources.test.mjs",
     "verify:prts-sync": "node scripts/verify-prts-sync.mjs",
     "preview": "vite preview frontend",
     "tauri": "tauri",

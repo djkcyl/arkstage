@@ -57,59 +57,41 @@ async fn fetch_page_raw(page: &str) -> Result<String, String> {
     crate::net::ensure_online()?;
     let encoded = urlencoding::encode(page);
     let url = format!("https://prts.wiki/w/{}", encoded);
+    let root = crate::data_root::data_root().join("cache/http-pages");
+    let valid_html = |bytes: &[u8]| {
+        bytes.len() <= 20 * 1024 * 1024
+            && std::str::from_utf8(bytes).is_ok_and(|text| {
+                text.to_ascii_lowercase().contains("<html") && text.contains("mw-parser-output")
+            })
+    };
+    let cached = crate::media::store_path(&root, &url)
+        .and_then(|path| std::fs::read(path).ok())
+        .filter(|bytes| valid_html(bytes));
     let mut last_error = String::new();
     for attempt in 1..=3 {
-        let response = crate::net::client()
-            .get(&url)
-            .header("Referer", "https://prts.wiki/")
-            .send()
-            .await;
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                if resp
-                    .content_length()
-                    .is_some_and(|len| len > 20 * 1024 * 1024)
-                {
-                    return Err(format!("PRTS response is unexpectedly large: {url}"));
-                }
-                let content_type = resp
-                    .headers()
-                    .get(reqwest::header::CONTENT_TYPE)
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                if !content_type.is_empty()
-                    && !content_type.contains("text/html")
-                    && !content_type.contains("application/xhtml")
-                {
+        match crate::http_cache::fetch(&url, cached.as_deref()).await {
+            Ok(result) => {
+                if !valid_html(&result.bytes) {
                     return Err(format!(
-                        "Unexpected PRTS content type {content_type}: {url}"
+                        "PRTS response is not a valid wiki HTML document: {url}"
                     ));
                 }
-                let bytes = resp
-                    .bytes()
-                    .await
-                    .map_err(|e| format!("Failed to read response: {e}"))?;
-                if bytes.len() > 20 * 1024 * 1024 {
-                    return Err(format!("PRTS response is unexpectedly large: {url}"));
+                if !result.not_modified {
+                    crate::media::write_local(&root, &url, &result.bytes)?;
                 }
-                let html = String::from_utf8(bytes.to_vec())
-                    .map_err(|_| format!("PRTS response is not UTF-8 HTML: {url}"))?;
-                if !html.to_ascii_lowercase().contains("<html") {
-                    return Err(format!(
-                        "PRTS response does not contain an HTML document: {url}"
-                    ));
-                }
-                return Ok(html);
+                crate::http_cache::remember(&url, &result);
+                log::info!(
+                    "[http-cache] wiki {}: {}",
+                    page,
+                    if result.not_modified {
+                        "unchanged"
+                    } else {
+                        "updated"
+                    }
+                );
+                return String::from_utf8(result.bytes).map_err(|error| error.to_string());
             }
-            Ok(resp) => {
-                let status = resp.status();
-                last_error = format!("HTTP {status}: {url}");
-                if status.is_client_error() && status.as_u16() != 429 {
-                    break;
-                }
-            }
-            Err(error) => last_error = format!("HTTP request failed: {error}"),
+            Err(error) => last_error = error,
         }
         if attempt < 3 {
             tokio::time::sleep(Duration::from_millis(attempt * 350)).await;

@@ -20,6 +20,8 @@ resources@GitHub ─jsDelivr/GitHub Raw─▶ 书架元数据/封面    图片�
 - **比例与输入**：原版逻辑画布固定为 1280×720，宿主舞台按 16:9 等比居中，宽屏/竖屏留黑边，HUD 与画布共享相同位置和缩放，禁止分别撑满宽高。手动显示“手动”并隐藏倍速框，开启自动后才显示“自动”和速度框。长按场景 350ms 或按住 Ctrl 调用原引擎最高档 `quick_play`；松开、取消触摸、拖动、失焦或离开页面均释放，恢复此前模式与自动速度，并吞掉长按后的额外点击。快进保留选项等待，释放后也不会因选项缓存恢复而继续快进。
 - **移动端稳定性**：桥接层将上游优先 WebGPU 的画布改为 WebGL，关闭 MSAA，初始和旋转/缩放后的渲染分辨率均限制在 1.5 倍以内。剧情清单仍包含全部音频；播放初始化不提前解码整章音频，而由原音频引擎按需加载，图片按两项一批预热，减少解码峰值。
 - **崩溃诊断**：前端环形日志与播放阶段同步保留到本地存储，关键阶段等待 Rust `logs/diagnostics.log` 落盘后才进入 GPU/解码路径；发布版同样启用原生日志。Android 捕获 Java 未处理异常、WebView 渲染进程终止及 API 30+ 历史进程退出原因。渲染进程终止后展示原生导出界面，避免默认处理连带杀死宿主；重启后可在设置或自动打开的恢复日志中复制/导出完整诊断。日志轮换限制大小，不依赖用户提前开启控制台。
+- **慢网络保护**：Wry 0.54.4 的 Android 自定义协议等待上限为 10 秒，超时会 panic。`ensure_playback_asset` 在异步 IPC 中准备引擎、图片、字体和按需音频，再由协议读取本地文件；相同 URL 合并请求、最多四个并行网络下载，图片压缩在阻塞线程池运行。所有协议响应另设独立的 8 秒截止保护，超时返回 504，迟到的响应被丢弃，不再触发 Wry 的 unwrap。
+- **引擎增量缓存**：新版 `StoryPlayer.<hash>.js` 发布入口、CSS 和 polyfill 描述共同标识模块版本；`engineCache.ts` 将桥接器版本、路由作用域和源内容摘要纳入持久化缓存，无更新时跳过依赖重读和 AST 重建。同页快照 revision 与验证版本均未变时不重复验证或写盘；无哈希数据表、旧版依赖及 wiki HTML 用绑定本地内容 SHA 的 ETag / Last-Modified 条件 GET，304 和相同的 200 内容均不重写资源。新数据表仍参与预下载清单版本计算，离线及网络失败保留已验证缓存。
 - **外部依赖兼容**：每个引擎 iframe 加载 toolbox 后执行 `installEngineCompatibility`，补齐新版工具库删掉、但音频 `fade()` 仍调用的 `Math.clamp`。已有实现保留，兼容补丁不修改应用主窗口。使用 `npm run test:engine` 回归验证；设置 `PRTS_TOOLBOX_FIXTURE=/path/to/krliov.toolbox.js` 可直接校验下载的上游工具库。
 - **预下载同步校验**先批量查询 MediaWiki oldid；只有页面 oldid、全局表哈希和外部引擎哈希全部匹配的 v2 manifest 才会复用。媒体下载与协议缓存会校验文件魔数并原子写入，HTML 错误页、空文件和中断文件会被删除后重新拉取。
 
@@ -70,6 +72,9 @@ npm run test:modules   # ESM 依赖解析、动态 API 桥接和外置 UI 隔离
 npm run test:diagnostics # 进程重启后的日志与检查点恢复、日志大小限制
 npm run test:playback  # 手动/自动、临时快进恢复和选项等待
 npm run test:transcript # LOG 分行、已读范围、字号持久化与边界
+npm run test:cache     # 引擎持久化复用、版本变动与损坏缓存
+npm ci --prefix tools/gen-index --no-audit --no-fund
+npm run test:resources # 资源快速探测、自动发现、仅变化资源下载
 
 # —— 仅后端（Rust / Tauri）——
 cargo test  --manifest-path src-tauri/Cargo.toml   # 后端单元测试
@@ -164,7 +169,7 @@ scripts/run-tests.sh     # 以上全部
 
 - **CI**（`.github/workflows/ci.yml`）：每次 push / PR 运行静态检查；push 时额外为各平台构建安装包并作为 Workflow 产物上传（即「CI 版」）。
 - **Release**（`.github/workflows/release.yml`）：推送 `v*` 版本标签时，为 Android(arm64-v8a APK) / Windows / macOS(Intel + Apple Silicon) / Linux 构建并发布到对应 GitHub Release 的 Assets。标签含连字符（如 `v1.0.0-beta.1`）发布为 **pre-release**。
-- **书架资源**（`.github/workflows/update-storylines.yml`）：手动运行后从 PRTS 重建 StoryLine 分类、从 ArknightsAssets2/PRTS 提取封面和横幅、生成内容哈希清单，并发布到独立 `resources` 分支。客户端下一次启动优先通过 jsDelivr 获取，失败时回退 GitHub Raw。
+- **书架资源**（`.github/workflows/update-storylines.yml`）：北京时间每天 22:00（UTC `0 14 * * *`）及手动触发。先用少量批量请求检查 wiki 修订号、活动数据、KV Git blob SHA 和图片 SHA；无变化时跳过 npm、图像工具、资源分支检出、图片下载和发布。有变化时按内容签名复用旧产物，只转换变动图片，发布到独立 `resources` 分支。调度由 GitHub Actions 执行，实际启动可能受平台队列影响。
 
 本地生成同一份资源负载：
 
@@ -176,7 +181,9 @@ node tools/extract-covers/extract-chapter-banners.mjs
 node tools/build-resources/build-bookshelf-resources.mjs build/resources
 ```
 
-新增乐章部署时，先运行 `gen-storylines.mjs --report` 确认新书名及所属 StoryLine，再同步两份人工校验映射：`tools/extract-covers/kv-map.json` 对应 ArknightsAssets2 的 `mixstory/kvs/kv_*.png`，`tools/extract-covers/chapter-banner-map.json` 对应活动页面 `活动信息` 模板中的 `标题图文件名`。生成后必须确认 `metadata.json` 同时包含新书名、`covers[书名]` 和 `banners[书名]`，再发布 `resources` 分支。所有读取 PRTS 的 Node 脚本也必须发送可识别且含项目联系地址的 Arkstage User-Agent；通用 Node/浏览器 UA 会被边缘防护拒绝为 403。
+自动同步使用 `node tools/build-resources/sync-resources.mjs` 探测；更新时运行 `--update --base=<当前 resources 检出目录> --out=<独立输出目录>`。探测结果暂存 `build/resource-sync/probe.json`，成功输出包含 `automation-state.json`，供下一次检测和图片复用。脚本从曲谱实际章节发现新增分类，从剧情一览发现主线，从 PRTS 语义活动查询发现新联动及横幅文件名。已知 KV 映射优先使用游戏竖封面；新增活动没有 KV 映射时自动使用 PRTS 横幅，不需要为了新活动手工补横幅映射。需要提升为原生 KV 时仍可维护 `kv-map.json`。新增故事缺少分类或图像、上游接口异常、源 SHA 在下载期间变动等情况均中止发布并保留旧分支，不猜测分类或发布残缺资源。
+
+`LICENSE` 保留完整 AGPL-3.0-only 正文并附授权范围；`LICENSE-SCOPE.md` 明确排除 PRTS、鹰角及其他第三方代码/素材。关于页通过 raw import 内置这两个仓库文件，资源分支同样携带说明。变更法律声明时须同步 README 中的范围与责任说明。
 
 ⚠️ **发版铁律**：发版前必须把 `package.json` 的 `version` 一并 bump 到 master 再打标签。应用内「检测更新」的首选源读取的就是 master 上 `package.json` 的 `version`（`cdn.jsdelivr.net/gh/<repo>@master/package.json`），漏 bump 会导致检测不到新版本。
 

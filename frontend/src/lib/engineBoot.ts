@@ -24,6 +24,8 @@ export interface WidgetBundle {
   engine_scripts: string[];
   module_engine?: ModuleEngine | null;
   revision?: string;
+  validation_version?: string;
+  metadata_urls?: string[];
   diagnostics?: {
     data_block_ids: string[];
     dom_element_ids?: string[];
@@ -64,6 +66,7 @@ export interface EngineHealth {
   globals: string[];
   engineScriptCount: number;
   assetDomains: string[];
+  metadataUrls?: string[];
 }
 
 export interface ScenarioAudit {

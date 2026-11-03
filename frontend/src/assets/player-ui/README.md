@@ -11,3 +11,6 @@ python tools/extract-player-ui.py /path/to/official-client.apk --version 2.7.91
 ```
 
 The APK and intermediate Unity assets are not bundled or committed.
+
+These third-party sprites are excluded from Arkstage's AGPL-3.0-only grant;
+see the repository's LICENSE-SCOPE.md for the scope and third-party notice.

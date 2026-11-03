@@ -4,16 +4,19 @@ mod compress;
 mod data_root;
 mod diagnostics;
 mod download;
+mod http_cache;
 mod media;
 mod models;
 mod net;
 mod parser;
+mod playback_cache;
+mod protocol;
 
 use commands::{assets, cache, wiki};
 use tauri::Manager;
 
 /// Build a small error response with permissive CORS.
-fn respond_err(responder: tauri::UriSchemeResponder, status: u16, msg: String) {
+fn respond_err(responder: protocol::AssetResponder, status: u16, msg: String) {
     let r = tauri::http::Response::builder()
         .status(status)
         .header("Access-Control-Allow-Origin", "*")
@@ -22,7 +25,7 @@ fn respond_err(responder: tauri::UriSchemeResponder, status: u16, msg: String) {
     responder.respond(r);
 }
 
-fn respond_asset(responder: tauri::UriSchemeResponder, bytes: Vec<u8>, path: &str, fallback: bool) {
+fn respond_asset(responder: protocol::AssetResponder, bytes: Vec<u8>, path: &str, fallback: bool) {
     let response = tauri::http::Response::builder()
         .status(200)
         .header("Content-Type", sniff_content_type(&bytes, path))
@@ -35,7 +38,7 @@ fn respond_asset(responder: tauri::UriSchemeResponder, bytes: Vec<u8>, path: &st
 }
 
 fn respond_or_fallback(
-    responder: tauri::UriSchemeResponder,
+    responder: protocol::AssetResponder,
     status: u16,
     msg: String,
     cached: Option<Vec<u8>>,
@@ -116,6 +119,7 @@ fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .register_asynchronous_uri_scheme_protocol("prts-cdn", |_app, request, responder| {
+            let responder = protocol::guard(responder, request.uri().to_string());
             // URL format:
             //   macOS/Linux: prts-cdn://localhost/{host}/{path}
             //   Windows:     http://prts-cdn.localhost/{host}/{path}
@@ -133,7 +137,17 @@ pub fn run() {
                 return;
             }
 
-            let query = uri.query().map(|q| format!("?{}", q)).unwrap_or_default();
+            let query = uri
+                .query()
+                .map(|q| {
+                    q.split('&')
+                        .filter(|part| *part != "arkstage-refresh=1")
+                        .collect::<Vec<_>>()
+                        .join("&")
+                })
+                .filter(|q| !q.is_empty())
+                .map(|q| format!("?{q}"))
+                .unwrap_or_default();
             let target_url = format!("https://{}{}", path, query);
 
             let media_root = media::media_root(&data_root::data_root());
@@ -175,6 +189,25 @@ pub fn run() {
             let path = path.to_string();
             tauri::async_runtime::spawn(async move {
                 let path = path.as_str();
+                if refresh {
+                    match http_cache::fetch(&target_url, cached.as_deref()).await {
+                        Ok(result) => {
+                            if let Err(error) =
+                                media::validate_asset_bytes(&target_url, &result.bytes)
+                            {
+                                respond_or_fallback(responder, 502, error, cached, path);
+                                return;
+                            }
+                            if !result.not_modified {
+                                let _ = media::write_local(&media_root, &target_url, &result.bytes);
+                            }
+                            http_cache::remember(&target_url, &result);
+                            respond_asset(responder, result.bytes, path, false);
+                        }
+                        Err(error) => respond_or_fallback(responder, 502, error, cached, path),
+                    }
+                    return;
+                }
                 let client = net::client();
                 match client
                     .get(&target_url)
@@ -290,6 +323,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            playback_cache::ensure_playback_asset,
             // Wiki fetching
             wiki::fetch_story_index,
             wiki::fetch_story_page,

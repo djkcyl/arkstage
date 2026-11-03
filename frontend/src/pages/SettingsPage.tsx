@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { isDebugConsoleEnabled, setDebugPref, debugBuildDefault } from "../lib/debugSettings";
-import { isHidePlayerBack, setHidePlayerBack, useLogFontSize, setLogFontSize, LOG_FONT_MIN, LOG_FONT_MAX } from "../lib/uiSettings";
+import { useLogFontSize, setLogFontSize, LOG_FONT_MIN, LOG_FONT_MAX } from "../lib/uiSettings";
 import { isAndroid } from "../lib/platform";
 import { getDownloadSettings, setDownloadSettings } from "../lib/predownload";
 import { useDownload } from "../lib/DownloadContext";
@@ -41,7 +41,6 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [resDir, setResDir] = useState<ResourceDirInfo | null>(null);
   const [debugConsole, setDebugConsole] = useState(isDebugConsoleEnabled());
-  const [hidePlayerBack, setHidePlayerBackState] = useState(isHidePlayerBack());
   const logFontSize = useLogFontSize();
   // Download tuning: concurrency + bandwidth limit (shown in KB/s; 0 = unlimited).
   const [concurrency, setConcurrency] = useState(4);
@@ -98,13 +97,6 @@ export default function SettingsPage() {
     } catch (e) {
       showMsg(`恢复失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
     }
-  };
-
-  const togglePlayerBack = () => {
-    const next = !hidePlayerBack;
-    setHidePlayerBack(next);
-    setHidePlayerBackState(next);
-    showMsg(next ? "已隐藏播放器内的返回按钮（用系统返回手势）" : "已显示播放器内的返回按钮");
   };
 
   const toggleDebugConsole = () => {
@@ -279,19 +271,6 @@ export default function SettingsPage() {
             />
             <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>0 = 不限速</span>
           </div>
-        </div>
-      </div>
-
-      {/* Hide the reader's on-screen back button */}
-      <div className="setting-group">
-        <label>播放器返回按钮</label>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-          <button className="nav-btn" onClick={togglePlayerBack}>
-            {hidePlayerBack ? "隐藏播放器返回按钮：开" : "隐藏播放器返回按钮：关"}
-          </button>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
-            {hidePlayerBack ? "阅读时不显示返回按钮，请用系统返回手势" : "阅读时在左上角显示返回按钮"}
-          </span>
         </div>
       </div>
 

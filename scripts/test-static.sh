@@ -11,6 +11,8 @@ npm run test:modules
 npm run test:diagnostics
 npm run test:playback
 npm run test:transcript
+npm run test:cache
+npm run test:resources
 
 echo "==> [2/6] bookshelf metadata fallback tests"
 npm run test:metadata

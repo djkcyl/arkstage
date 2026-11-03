@@ -4,12 +4,12 @@ import { captureIframe, pushLog, playbackCheckpoint } from "./debugLog";
 import type { FrameBootOptions, FrameBootResult } from "./engineBoot";
 import { createPlaybackModes } from "./playbackModes";
 import { bindSceneInput } from "./playerInput";
+import { invoke } from "@tauri-apps/api/core";
+import { cachedEngine, type EngineDescriptor, type PreparedEngine } from "./engineCache";
+import { reportLoading } from "./loadingProgress";
+import { ensurePlaybackAsset } from "./mediaCache";
 
-export interface ModuleEngine {
-  entry_url: string;
-  stylesheet_urls: string[];
-  polyfill_urls: string[];
-}
+export type ModuleEngine = EngineDescriptor;
 
 export interface PlayerController {
   advance(): Promise<void>;
@@ -51,12 +51,6 @@ interface EngineBridge {
   setVolume(volume: number): void;
 }
 
-interface PreparedEngine {
-  source: string;
-  resources: string[];
-  revision: string;
-}
-
 const prepared = new Map<string, Promise<PreparedEngine>>();
 const metadataRequests = new Map<string, Promise<Response>>();
 const OFFICIAL_HOSTS = ["static.prts.wiki", "torappu.prts.wiki", "prts.wiki"];
@@ -72,22 +66,30 @@ function prepareEngine(descriptor: ModuleEngine): Promise<PreparedEngine> {
   const key = JSON.stringify(descriptor);
   let promise = prepared.get(key);
   if (!promise) {
-    promise = (async () => {
+    promise = cachedEngine(descriptor, {
+      read: (key) => invoke<string | null>("load_from_cache", { key }),
+      write: (key, data) => invoke("save_to_cache", { key, data }),
+    }, async () => {
       if (!isEngineAsset(descriptor.entry_url)) throw new Error("PRTS 模块入口来源无效");
       const sources = new Map<string, string>();
       const resources = new Set<string>(descriptor.stylesheet_urls);
       const waiting = [descriptor.entry_url, ...descriptor.polyfill_urls];
       let bytes = 0;
+      let done = 0, total = waiting.length;
+      reportLoading({ phase: "engine", message: "正在缓存演出引擎…", done, total, bytes });
       while (waiting.length) {
         const batch = [...new Set(waiting.splice(0))].filter((url) => !sources.has(url));
         if (sources.size + batch.length > 128) throw new Error("PRTS 模块依赖数量异常");
         const loaded = await Promise.all(batch.map(async (url) => {
           if (!isEngineAsset(url)) throw new Error(`PRTS 模块依赖来源无效: ${url}`);
+          await ensurePlaybackAsset(url);
           const response = await fetch(localUrl(url));
           if (!response.ok) throw new Error(`PRTS 模块加载失败 (${response.status}): ${url}`);
           const source = await response.text();
           if (!source.trim() || /^\s*</.test(source)) throw new Error(`PRTS 返回了无效模块: ${url}`);
           bytes += source.length;
+          done++;
+          reportLoading({ phase: "engine", message: "正在缓存演出引擎…", done, total, bytes });
           if (bytes > 32 * 1024 * 1024) throw new Error("PRTS 模块依赖体积异常");
           return { url, source };
         }));
@@ -96,12 +98,25 @@ function prepareEngine(descriptor: ModuleEngine): Promise<PreparedEngine> {
           resources.add(url);
           waiting.push(...moduleDependencies(source, url).filter((url) => /\.m?js(?:[?#]|$)/.test(url)));
         }
+        total = sources.size + new Set(waiting.filter((url) => !sources.has(url))).size;
+        reportLoading({ phase: "engine", message: "正在解析引擎依赖…", done, total, bytes });
       }
       const source = buildEngineModule(sources.get(descriptor.entry_url)!, descriptor.entry_url, sources, localUrl);
       const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode([...sources.values()].join("\n")));
       const revision = [...new Uint8Array(hash)].map((n) => n.toString(16).padStart(2, "0")).join("");
       return { source, resources: [...resources], revision };
-    })();
+    }, localUrl(descriptor.entry_url)).then(async ({ engine, reused }) => {
+      // The prepared bridge may outlive individually deleted media-cache files.
+      // Refill missing modules through IPC before native import() touches Wry.
+      let complete = 0;
+      await Promise.all(engine.resources.map(async (url) => {
+        await ensurePlaybackAsset(url);
+        reportLoading({ phase: "engine", message: "正在准备本地演出引擎…", done: ++complete, total: engine.resources.length });
+      }));
+      pushLog("info", `[engine-cache] ${reused ? "reuse" : "prepared"}: ${descriptor.entry_url}`);
+      if (reused) reportLoading({ phase: "engine", message: "演出引擎未更新，复用本地缓存", done: 1, total: 1 });
+      return engine;
+    });
     prepared.set(key, promise);
     void promise.catch(() => { if (prepared.get(key) === promise) prepared.delete(key); });
   }
@@ -109,8 +124,9 @@ function prepareEngine(descriptor: ModuleEngine): Promise<PreparedEngine> {
 }
 
 /** Include fresh sidecar contents in manifest cache identity, not just wiki oldid. */
-export async function modernEngineRevision(descriptor: ModuleEngine): Promise<string> {
+export async function modernEngineRevision(descriptor: ModuleEngine, metadataUrls: string[] = []): Promise<string> {
   const runtime = await prepareEngine(descriptor);
+  await Promise.all(metadataUrls.map((url) => metadataResponse(url)));
   const metadata = await Promise.all([...metadataRequests.entries()].sort(([a], [b]) => a.localeCompare(b))
     .map(async ([url, response]) => `${url}:${await (await response).clone().text()}`));
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(runtime.revision + metadata.join("\n")));
@@ -118,11 +134,11 @@ export async function modernEngineRevision(descriptor: ModuleEngine): Promise<st
 }
 
 function metadataResponse(url: string): Promise<Response> {
+  if (!/^https:\/\/(static|torappu)\.prts\.wiki\/.*\.json(?:[?#]|$)/.test(url)) return Promise.reject(new Error("PRTS 数据表来源无效"));
   let promise = metadataRequests.get(url);
   if (!promise) {
-    const local = new URL(localUrl(url));
-    local.searchParams.set("arkstage-refresh", "1");
-    promise = fetch(local.href).then(async (response) => {
+    reportLoading({ phase: "data", message: "正在检查演出数据表更新…" });
+    promise = ensurePlaybackAsset(url, true).then(() => fetch(localUrl(url))).then(async (response) => {
       if (!response.ok) throw new Error(`PRTS 数据表加载失败 (${response.status}): ${url}`);
       await response.clone().json();
       return response;
@@ -144,23 +160,61 @@ function installRouting(win: Window & typeof globalThis, metadata: Set<string>):
       const response = await metadataResponse(url);
       return new win.Response(await response.arrayBuffer(), { status: response.status, headers: response.headers });
     }
+    await ensurePlaybackAsset(url);
     return nativeFetch(isRequest ? new win.Request(route(url), input) : route(url), init);
   };
   const nativeOpen = win.XMLHttpRequest.prototype.open;
+  const xhrRequests = new WeakMap<XMLHttpRequest, { url: string; async: boolean }>();
   win.XMLHttpRequest.prototype.open = function (method: string, url: string | URL, async: boolean = true, username?: string | null, password?: string | null) {
+    xhrRequests.set(this, { url: String(url), async });
     nativeOpen.call(this, method, route(String(url)), async, username ?? null, password ?? null);
+  };
+  const nativeSend = win.XMLHttpRequest.prototype.send;
+  win.XMLHttpRequest.prototype.send = function (body) {
+    const request = xhrRequests.get(this);
+    if (!request?.async) { nativeSend.call(this, body); return; }
+    void ensurePlaybackAsset(request.url).then(() => {
+      if (xhrRequests.get(this) === request) nativeSend.call(this, body);
+    }).catch((error) => {
+      pushLog("error", "[playback-cache] XHR failed", request.url, error);
+      this.dispatchEvent(new win.ProgressEvent("error"));
+      this.dispatchEvent(new win.ProgressEvent("loadend"));
+    });
+  };
+  const nativeAbort = win.XMLHttpRequest.prototype.abort;
+  win.XMLHttpRequest.prototype.abort = function () { xhrRequests.delete(this); nativeAbort.call(this); };
+  const sources = new WeakMap<Element, symbol>();
+  const setSource = (element: Element, value: string, apply: () => void) => {
+    const token = Symbol(); sources.set(element, token);
+    void ensurePlaybackAsset(value).then(() => { if (sources.get(element) === token) apply(); })
+      .catch((error) => {
+        if (sources.get(element) !== token) return;
+        pushLog("error", "[playback-cache] asset failed", value, error);
+        element.dispatchEvent(new win.Event("error"));
+      });
   };
   for (const proto of [win.HTMLImageElement.prototype, win.HTMLMediaElement.prototype, win.HTMLSourceElement.prototype]) {
     const descriptor = Object.getOwnPropertyDescriptor(proto, "src");
     if (!descriptor?.set) continue;
     Object.defineProperty(proto, "src", {
       ...descriptor,
-      set(value: string) { descriptor.set!.call(this, route(value)); },
+      set(value: string) {
+        const element = this as HTMLElement;
+        setSource(element, value, () => {
+          descriptor.set!.call(element, route(value));
+          if (element instanceof win.HTMLSourceElement && element.parentElement instanceof win.HTMLMediaElement) element.parentElement.load();
+        });
+      },
     });
   }
   const nativeSetAttribute = win.Element.prototype.setAttribute;
   win.Element.prototype.setAttribute = function (key, value) {
-    nativeSetAttribute.call(this, key, ["src", "href"].includes(key) ? route(value) : value);
+    if (key === "src" && ["IMG", "AUDIO", "VIDEO", "SOURCE"].includes(this.tagName)) {
+      setSource(this, value, () => {
+        nativeSetAttribute.call(this, key, route(value));
+        if (this instanceof win.HTMLSourceElement && this.parentElement instanceof win.HTMLMediaElement) this.parentElement.load();
+      });
+    } else nativeSetAttribute.call(this, key, ["src", "href"].includes(key) ? route(value) : value);
   };
   const NativeFontFace = win.FontFace;
   win.FontFace = class extends NativeFontFace {
@@ -213,15 +267,18 @@ export async function bootModernEngineInFrame(opts: FrameBootOptions): Promise<F
   const urls = bridge.manifest(context);
   const manifest = [...new Set([...runtime.resources, ...metadata, ...urls])].filter((url) => /^https?:\/\//.test(url));
   if (!urls.length) throw new Error("PRTS 新版引擎未生成资源清单");
-  const health = { globals: ["createStoryPlayer", "loadContextByScript", "collectPreloadAssetUrls", "preloadContextAssets"], engineScriptCount: runtime.resources.length, assetDomains: OFFICIAL_HOSTS };
+  const health = { globals: ["createStoryPlayer", "loadContextByScript", "collectPreloadAssetUrls", "preloadContextAssets"], engineScriptCount: runtime.resources.length, assetDomains: OFFICIAL_HOSTS, metadataUrls: [...metadata] };
   pushLog("info", `[module-engine] ${opts.title}: ${manifest.length} assets; entry=${descriptor.entry_url}`);
   if (opts.mode === "manifest") return { manifest, health };
+  await Promise.all(manifest.filter((url) => /\.(?:woff2?|ttf|otf|css)(?:[?#]|$)/i.test(url)).map((url) => ensurePlaybackAsset(url)));
   opts.onStatus?.("正在预加载画面资源…");
+  reportLoading({ phase: "art", message: "正在预加载画面资源…", done: 0, total: 100 });
   await checkpoint("preload-start", `assets=${manifest.length}; audio=on-demand; decode-batch=2`);
   let lastProgress = -1;
   await bridge.preload(context, (progress) => {
     const percent = Math.floor(progress * 10) * 10;
     opts.onStatus?.(`正在预加载画面资源… ${Math.round(progress * 100)}%`);
+    reportLoading({ phase: "art", message: "正在预加载画面资源…", done: Math.round(progress * 100), total: 100 });
     if (percent !== lastProgress) { lastProgress = percent; pushLog("info", `[playback] ${opts.title} preload=${percent}%`); }
   });
   await checkpoint("preload-ready");
@@ -229,6 +286,7 @@ export async function bootModernEngineInFrame(opts: FrameBootOptions): Promise<F
   const host = doc.getElementById("arkstage-stage")!;
   let player = bridge.createPlayer(context);
   opts.onStatus?.("正在创建兼容模式画布…");
+  reportLoading({ phase: "initialize", message: "正在创建兼容模式画布…" });
   await checkpoint("renderer-mount", "preference=webgl; antialias=false; resolution<=1.5");
   await player.mount(host);
   await checkpoint("ready", `canvas=${host.querySelector("canvas")?.width}x${host.querySelector("canvas")?.height}`);

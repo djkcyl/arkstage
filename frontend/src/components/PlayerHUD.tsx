@@ -107,7 +107,6 @@ export default function PlayerHUD({ controller, script, onExit, onError }: {
           <label className="reader-volume">音量 <input aria-label="音量" type="range" min="0" max="1" step="0.05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>
           <div className="reader-menu-actions">
             <button onClick={() => { setPanel(null); run(() => controller.reset()); }}>重新播放</button>
-            <button onClick={onExit}>退出阅读</button>
           </div>
         </>}
         {panel === "log" && <>

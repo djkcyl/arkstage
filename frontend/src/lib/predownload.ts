@@ -5,6 +5,8 @@ import type { WidgetBundle } from "./engineBoot";
 import { setManifestProgress } from "./keepalive";
 import { pushLog } from "./debugLog";
 import { modernEngineRevision } from "./modernEngine";
+import { ENGINE_ADAPTER_VERSION } from "./engineCache";
+import { reportLoading } from "./loadingProgress";
 
 /**
  * Predownload status. Indexing (manifest) and downloading run CONCURRENTLY now
@@ -70,6 +72,7 @@ interface RawStoryRuntime {
   story: { script: string; title: string };
   bundle: WidgetBundle;
   revision: string;
+  validationVersion?: string;
 }
 
 export interface StoryRuntime extends RawStoryRuntime {
@@ -113,7 +116,12 @@ async function refreshBundle(): Promise<WidgetBundle> {
     if (cached && isSuspiciousRegression(fresh, cached)) {
       throw new Error("PRTS 全局资源表数量异常回退，已拒绝覆盖本地可用版本");
     }
+    if (cached?.revision && cached.revision === fresh.revision && cached.validation_version === ENGINE_ADAPTER_VERSION) {
+      pushLog("info", "[runtime-update] shared engine unchanged; reuse verified snapshot");
+      return cached;
+    }
     await validateBundleBoot(fresh, "W2G/BEG");
+    fresh.validation_version = ENGINE_ADAPTER_VERSION;
     await invoke("save_to_cache", {
       key: "widget-bundle-v6",
       data: JSON.stringify(fresh),
@@ -174,13 +182,19 @@ async function refreshStoryRuntime(title: string): Promise<StoryRuntime> {
     // Continue with live fetch.
   }
   try {
+    reportLoading({ phase: "check", message: "正在检查剧情与演出引擎更新…" });
     const fresh = await invoke<RawStoryRuntime>("fetch_story_runtime", { pageTitle: title });
     if (cached && isSuspiciousRegression(fresh.bundle, cached.bundle)) {
       throw new Error("PRTS 当前同页快照完整性低于本地版本，已阻止覆盖");
     }
+    if (cached && cached.revision === fresh.revision && cached.validationVersion === ENGINE_ADAPTER_VERSION) {
+      pushLog("info", `[runtime-update] ${title}: unchanged; reuse verified snapshot`);
+      return { ...cached, source: "live" };
+    }
     // This is the promotion gate: execute the candidate in a disposable iframe
     // before it is allowed to replace last-known-good on disk.
     await validateRuntimeBoot(fresh, title);
+    fresh.validationVersion = ENGINE_ADAPTER_VERSION;
     if (cached && cached.revision !== fresh.revision) {
       await invoke("save_to_cache", { key: previousKey, data: JSON.stringify(cached) }).catch(() => {});
     }
@@ -260,7 +274,7 @@ function validateRuntimeShape(runtime: RawStoryRuntime): string[] {
 async function validateRuntimeBoot(runtime: RawStoryRuntime, title: string): Promise<void> {
   const problems = validateRuntimeShape(runtime);
   if (problems.length) throw new Error(`候选快照结构验证失败: ${problems.join("；")}`);
-  await validateCandidateBoot(runtime.bundle, runtime.story.script, title);
+  runtime.bundle.metadata_urls = await validateCandidateBoot(runtime.bundle, runtime.story.script, title);
 }
 
 async function validateBundleBoot(bundle: WidgetBundle, title: string): Promise<void> {
@@ -269,10 +283,10 @@ async function validateBundleBoot(bundle: WidgetBundle, title: string): Promise<
   const parsed = new DOMParser().parseFromString(bundle.data_blocks_html, "text/html");
   const script = parsed.getElementById("datas_txt")?.textContent || "";
   if (!script.trim()) throw new Error("候选引擎自带剧情脚本为空");
-  await validateCandidateBoot(bundle, script, title);
+  bundle.metadata_urls = await validateCandidateBoot(bundle, script, title);
 }
 
-async function validateCandidateBoot(bundle: WidgetBundle, script: string, title: string): Promise<void> {
+async function validateCandidateBoot(bundle: WidgetBundle, script: string, title: string): Promise<string[]> {
   const iframe = document.createElement("iframe");
   iframe.style.cssText = "position:fixed;left:-99999px;top:0;width:960px;height:540px;border:0;";
   document.body.appendChild(iframe);
@@ -287,6 +301,7 @@ async function validateCandidateBoot(bundle: WidgetBundle, script: string, title
     if (!result.manifest?.length) {
       throw new Error("候选引擎未能完成预加载资源解析");
     }
+    return result.health.metadataUrls ?? [];
   } finally {
     iframe.remove();
   }
@@ -566,7 +581,7 @@ export async function runPredownload(
     // below all load jQuery/PreloadJS/toolbox from disk instead of the network.
     if (!bundle.module_engine) await prewarmEngineDeps();
     const engineAssetsRevision = bundle.module_engine
-      ? await modernEngineRevision(bundle.module_engine) : await refreshEngineDeps();
+      ? await modernEngineRevision(bundle.module_engine, bundle.metadata_urls) : await refreshEngineDeps();
     const runtimeRevision = `${bundle.revision || "legacy"}|${engineAssetsRevision}`;
     let pageRevisions: Record<string, string> = {};
     try {
