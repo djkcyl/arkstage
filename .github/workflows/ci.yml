@@ -145,10 +145,12 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install NDK + platform/build-tools, export NDK env
         run: |
-          yes | sdkmanager "ndk;27.2.12479018" "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager "ndk;27.2.12479018" "platforms;android-35" "build-tools;35.0.0"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
