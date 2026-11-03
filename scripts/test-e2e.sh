@@ -117,7 +117,7 @@ awk -v v="$sd" 'BEGIN{exit !(v+0>0.05)}' && ok "browser list rendered (stddev=$s
 pre_media=$(count_media)   # baseline BEFORE opening (engine auto-preload starts on boot)
 cl "$STORY_A_X" "$STORY_A_Y" 2
 info "opened a story; waiting for engine bundle + story script to cache"
-wait_file "$CACHE/widget-bundle-v2.json" 40 && ok "engine widget bundle cached (widget-bundle-v2.json)" || no "engine bundle not cached"
+wait_file "$CACHE/widget-bundle-v6.json" 40 && ok "engine widget bundle cached (widget-bundle-v6.json)" || no "engine bundle not cached"
 # The story script is saved asynchronously after the bundle, so poll for it.
 sd_deadline=$((SECONDS+30))
 while ! ls "$CACHE"/stories_*.json >/dev/null 2>&1 && [ $SECONDS -lt $sd_deadline ]; do sleep 1; done

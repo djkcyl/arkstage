@@ -2,6 +2,20 @@ import { getVersion } from "@tauri-apps/api/app";
 import { version as osVersion } from "@tauri-apps/plugin-os";
 import { invoke } from "@tauri-apps/api/core";
 import { getPlatform } from "./platform";
+import { getEntries } from "./debugLog";
+
+export async function collectDiagnosticReport(): Promise<string> {
+  const environment = await collectEnvInfo();
+  let native = "";
+  try { native = await invoke<string>("read_diagnostics"); }
+  catch (error) { native = `无法读取原生日志: ${String(error)}`; }
+  const journal = getEntries().map((e) => `[${new Date(e.time).toISOString()} ${e.level.toUpperCase()}] ${e.msg}`).join("\n");
+  return `${environment}\n\n===== 前端持久日志 =====\n${journal}\n\n${native}`;
+}
+
+export async function exportDiagnosticReport(): Promise<string> {
+  return invoke<string>("export_diagnostics", { extra: await collectDiagnosticReport() });
+}
 
 /**
  * Gather a one-shot environment snapshot for bug reports — app version, platform,
@@ -57,7 +71,7 @@ export async function copyText(text: string): Promise<void> {
     document.body.appendChild(ta);
     ta.select();
     try {
-      document.execCommand("copy");
+      if (!document.execCommand("copy")) throw new Error("无法复制，请使用导出诊断日志");
     } finally {
       ta.remove();
     }

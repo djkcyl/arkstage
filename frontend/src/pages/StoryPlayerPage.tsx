@@ -7,7 +7,10 @@ import { useCompression } from "../lib/CompressionContext";
 import { markRead, setLastWatched } from "../lib/readState";
 import { setLandscape } from "../lib/orientation";
 import { setImmersive } from "../lib/immersive";
-import { useHidePlayerBack } from "../lib/uiSettings";
+import type { PlayerController } from "../lib/modernEngine";
+import PlayerHUD from "../components/PlayerHUD";
+import { playbackCheckpoint, pushLog } from "../lib/debugLog";
+import { reportLoading, useLoadingProgress } from "../lib/loadingProgress";
 
 /**
  * Story player page — loads the ORIGINAL PRTS ScenarioSimulator engine via bootEngine().
@@ -17,15 +20,19 @@ import { useHidePlayerBack } from "../lib/uiSettings";
 export default function StoryPlayerPage() {
   const { pageTitle } = useParams<{ pageTitle: string }>();
   const navigate = useNavigate();
-  const hidePlayerBack = useHidePlayerBack();
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("正在加载...");
+  const progress = useLoadingProgress();
   const [error, setError] = useState<string | null>(null);
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
+  const controllerRef = useRef<PlayerController | null>(null);
+  const [controller, setController] = useState<PlayerController | null>(null);
+  const [storyScript, setStoryScript] = useState("");
 
   const decodedTitle = pageTitle ? decodeURIComponent(pageTitle) : "";
   const { busy: compressionBusy } = useCompression();
+
 
   // Safety net: if a compression batch is active (e.g. the app restarted onto a
   // restored /play route while the batch resumes), bounce out of the reader —
@@ -65,6 +72,10 @@ export default function StoryPlayerPage() {
 
     let cancelled = false;
     const container = containerRef.current;
+    setLoading(true);
+    setError(null);
+    setSyncWarning(null);
+    setController(null);
 
     (async () => {
       try {
@@ -72,6 +83,7 @@ export default function StoryPlayerPage() {
         // refresh fails, a validated last-known-good snapshot is retained visibly.
         setStatus(`正在同步剧情与演出引擎: ${decodedTitle}...`);
         const runtime = await loadStoryRuntime(decodedTitle);
+        setStoryScript(runtime.story.script);
         if (runtime.source !== "live") {
           setSyncWarning("PRTS 同步失败，当前使用上次验证成功的离线快照；建议联网后重新进入。\n" + (runtime.warning || ""));
         }
@@ -79,6 +91,7 @@ export default function StoryPlayerPage() {
 
         // === Step 3: Boot the engine inside an isolated iframe realm ===
         setStatus("正在初始化播放器...");
+        reportLoading({ phase: "initialize", message: "正在初始化播放器…" });
         const iframe = document.createElement("iframe");
         iframe.style.cssText = "width:100%;height:100%;border:0;display:block;background:#000;";
         container.innerHTML = "";
@@ -92,6 +105,8 @@ export default function StoryPlayerPage() {
             title: decodedTitle,
             mode: "play",
             isCancelled: () => cancelled,
+            onStatus: (message) => { setStatus(message); if (!runtime.bundle.module_engine) reportLoading({ phase: "initialize", message }); },
+            onFatal: setError,
           });
         } catch (candidateError) {
           if (!runtime.fallback || cancelled) throw candidateError;
@@ -109,16 +124,25 @@ export default function StoryPlayerPage() {
             title: decodedTitle,
             mode: "play",
             isCancelled: () => cancelled,
+            onStatus: (message) => { setStatus(message); if (!runtime.fallback!.bundle.module_engine) reportLoading({ phase: "initialize", message }); },
+            onFatal: setError,
           });
+          setStoryScript(runtime.fallback.story.script);
         }
 
         if (boot.audit?.missing.length) {
           setSyncWarning(`演出资源表校验发现 ${boot.audit.missing.length} 项缺失：\n${boot.audit.missing.slice(0, 8).join("\n")}`);
         }
 
+        if (cancelled) { boot.controller?.dispose(); return; }
+        controllerRef.current = boot.controller ?? null;
+        setController(boot.controller ?? null);
+
         setLoading(false);
       } catch (e) {
         if (!cancelled) {
+          pushLog("error", "[playback] initialization failed:", e);
+          await playbackCheckpoint(decodedTitle, "failed", String(e));
           setError(e instanceof Error ? e.message : String(e));
           setLoading(false);
         }
@@ -127,6 +151,9 @@ export default function StoryPlayerPage() {
 
     return () => {
       cancelled = true;
+      controllerRef.current?.dispose();
+      controllerRef.current = null;
+      void playbackCheckpoint(decodedTitle, "cancelled");
       // Removing the iframe disposes the whole engine realm (timers, audio, globals).
       try {
         container
@@ -155,7 +182,11 @@ export default function StoryPlayerPage() {
 
   return (
     <div style={{ width: "100%", height: "100%", background: "#000", position: "relative" }}>
-      {!hidePlayerBack && <button onClick={handleBack} style={backBtnStyle} aria-label="返回" title="返回">◀</button>}
+      {!controller && <button onClick={handleBack} style={backBtnStyle} aria-label="返回" title="返回">◀</button>}
+
+      {controller && !loading && (
+        <PlayerHUD controller={controller} script={storyScript} onExit={handleBack} onError={setSyncWarning} />
+      )}
 
       {syncWarning && (
         <div style={warningStyle} role="status">
@@ -166,17 +197,25 @@ export default function StoryPlayerPage() {
 
       {loading && (
         <div style={centerStyle}>
-          <div style={{ color: "#929292", fontSize: "16px" }}>{status}</div>
+          <div style={{ color: "#929292", fontSize: "16px" }}>{progress.message || status}</div>
+          <progress aria-label={progress.message} max={progress.total || 1}
+            value={progress.total ? Math.min(progress.done ?? 0, progress.total) : undefined}
+            style={{ width: "min(360px, 75vw)", height: "8px", accentColor: "#f4c430" }} />
+          {progress.total !== undefined && <div style={{ color: "#929292", fontSize: "13px" }}>
+            {progress.phase === "art" ? `${progress.done ?? 0}%` : `${progress.done ?? 0} / ${progress.total}`}
+            {progress.bytes ? ` · ${(progress.bytes / 1024 / 1024).toFixed(1)} MB` : ""}
+          </div>}
         </div>
       )}
 
       <div
         ref={containerRef}
-        style={{ width: "100%", height: "100%", display: loading ? "none" : "block" }}
+        style={{ width: "100%", height: "100%", visibility: loading ? "hidden" : "visible" }}
       />
     </div>
   );
 }
+
 
 const centerStyle: React.CSSProperties = {
   display: "flex",

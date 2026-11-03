@@ -54,7 +54,9 @@ jobs:
         shell: bash
         run: rm -f package-lock.json && npm install --no-audit --no-fund
       - name: Run static test suite (tsc + vite build + cargo test/build)
-        run: bash scripts/test-static.sh
+        run: |
+          npm ci --prefix tools/gen-index --no-audit --no-fund
+          bash scripts/test-static.sh
 
   # ---- CI build: produce installers per platform on every push ----------------
   build:

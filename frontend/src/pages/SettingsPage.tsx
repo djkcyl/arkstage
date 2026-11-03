@@ -3,14 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { isDebugConsoleEnabled, setDebugPref, debugBuildDefault } from "../lib/debugSettings";
-import { isHidePlayerBack, setHidePlayerBack } from "../lib/uiSettings";
+import { useLogFontSize, setLogFontSize, LOG_FONT_MIN, LOG_FONT_MAX } from "../lib/uiSettings";
 import { isAndroid } from "../lib/platform";
 import { getDownloadSettings, setDownloadSettings } from "../lib/predownload";
 import { useDownload } from "../lib/DownloadContext";
 import { useCompression } from "../lib/CompressionContext";
 import type { Tier, CompressEstimate } from "../lib/CompressionContext";
 import type { StoryIndex } from "../hooks/useStoryIndex";
-import { collectEnvInfo, copyText } from "../lib/diagnostics";
+import { collectEnvInfo, copyText, collectDiagnosticReport, exportDiagnosticReport } from "../lib/diagnostics";
 
 interface CacheStatus {
   story_index_cached: boolean;
@@ -41,7 +41,7 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [resDir, setResDir] = useState<ResourceDirInfo | null>(null);
   const [debugConsole, setDebugConsole] = useState(isDebugConsoleEnabled());
-  const [hidePlayerBack, setHidePlayerBackState] = useState(isHidePlayerBack());
+  const logFontSize = useLogFontSize();
   // Download tuning: concurrency + bandwidth limit (shown in KB/s; 0 = unlimited).
   const [concurrency, setConcurrency] = useState(4);
   const [rateLimitKbps, setRateLimitKbps] = useState(0);
@@ -97,13 +97,6 @@ export default function SettingsPage() {
     } catch (e) {
       showMsg(`恢复失败: ${e instanceof Error ? e.message : String(e)}`, 5000);
     }
-  };
-
-  const togglePlayerBack = () => {
-    const next = !hidePlayerBack;
-    setHidePlayerBack(next);
-    setHidePlayerBackState(next);
-    showMsg(next ? "已隐藏播放器内的返回按钮（用系统返回手势）" : "已显示播放器内的返回按钮");
   };
 
   const toggleDebugConsole = () => {
@@ -234,6 +227,21 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      <div className="setting-group">
+        <label htmlFor="log-font-size">剧情日志（LOG）字号</label>
+        <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
+          <input id="log-font-size" type="range" min={LOG_FONT_MIN} max={LOG_FONT_MAX} step={1}
+            value={logFontSize} onChange={(event) => setLogFontSize(Number(event.target.value))}
+            style={{ width: "min(280px, 100%)" }} />
+          <output htmlFor="log-font-size">{logFontSize} px</output>
+        </div>
+        <div style={{ marginTop: "12px", padding: "12px 16px", borderLeft: "2px solid var(--text-secondary)", fontSize: `${logFontSize}px`, lineHeight: 1.7 }}>
+          <div style={{ color: "var(--text-secondary)", marginBottom: ".25em" }}>阿米娅</div>
+          <div>博士，我们准备出发吧。</div>
+        </div>
+        <p style={{ color: "var(--text-secondary)", fontSize: "13px" }}>自动保存，仅调整 LOG 内的文字大小。</p>
+      </div>
+
       {/* Download tuning */}
       <div className="setting-group">
         <label>下载设置（预下载的并发与限速）</label>
@@ -266,19 +274,6 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Hide the reader's on-screen back button */}
-      <div className="setting-group">
-        <label>播放器返回按钮</label>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-          <button className="nav-btn" onClick={togglePlayerBack}>
-            {hidePlayerBack ? "隐藏播放器返回按钮：开" : "隐藏播放器返回按钮：关"}
-          </button>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
-            {hidePlayerBack ? "阅读时不显示返回按钮，请用系统返回手势" : "阅读时在左上角显示返回按钮"}
-          </span>
-        </div>
-      </div>
-
       {/* Debug console */}
       <div className="setting-group">
         <label>调试控制台</label>
@@ -293,6 +288,11 @@ export default function SettingsPage() {
             （构建默认：{debugBuildDefault() ? "开" : "关"}）
           </span>
         </div>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
+          <button className="nav-btn" onClick={() => void collectDiagnosticReport().then(copyText).then(() => showMsg("完整诊断已复制")).catch((e) => showMsg(`复制失败：${String(e)}`, 5000))}>复制完整诊断</button>
+          <button className="nav-btn" onClick={() => void exportDiagnosticReport().then((path) => showMsg(`诊断日志已导出：${path}`, 8000)).catch((e) => showMsg(`导出失败：${String(e)}`, 5000))}>导出诊断日志</button>
+        </div>
+        <p style={{ color: "var(--text-secondary)", fontSize: "13px" }}>日志自动保留，重新打开应用后仍可导出上次播放阶段及系统退出信息，无需提前开启控制台。</p>
       </div>
 
       {/* Resource directory (desktop only — Android storage is fixed) */}

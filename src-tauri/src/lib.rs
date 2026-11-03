@@ -2,23 +2,53 @@ mod android_service;
 mod commands;
 mod compress;
 mod data_root;
+mod diagnostics;
 mod download;
+mod http_cache;
 mod media;
 mod models;
 mod net;
 mod parser;
+mod playback_cache;
+mod protocol;
 
 use commands::{assets, cache, wiki};
 use tauri::Manager;
 
 /// Build a small error response with permissive CORS.
-fn respond_err(responder: tauri::UriSchemeResponder, status: u16, msg: String) {
+fn respond_err(responder: protocol::AssetResponder, status: u16, msg: String) {
     let r = tauri::http::Response::builder()
         .status(status)
         .header("Access-Control-Allow-Origin", "*")
         .body(msg.into_bytes())
         .unwrap();
     responder.respond(r);
+}
+
+fn respond_asset(responder: protocol::AssetResponder, bytes: Vec<u8>, path: &str, fallback: bool) {
+    let response = tauri::http::Response::builder()
+        .status(200)
+        .header("Content-Type", sniff_content_type(&bytes, path))
+        .header("Access-Control-Allow-Origin", "*")
+        .header("X-PRTS-Cache-Fallback", if fallback { "1" } else { "0" })
+        .header("Access-Control-Expose-Headers", "X-PRTS-Cache-Fallback")
+        .body(bytes)
+        .unwrap();
+    responder.respond(response);
+}
+
+fn respond_or_fallback(
+    responder: protocol::AssetResponder,
+    status: u16,
+    msg: String,
+    cached: Option<Vec<u8>>,
+    path: &str,
+) {
+    if let Some(bytes) = cached {
+        respond_asset(responder, bytes, path, true);
+    } else {
+        respond_err(responder, status, msg);
+    }
 }
 
 /// Content-type from the file's magic bytes, falling back to the extension. Needed
@@ -89,6 +119,7 @@ fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .register_asynchronous_uri_scheme_protocol("prts-cdn", |_app, request, responder| {
+            let responder = protocol::guard(responder, request.uri().to_string());
             // URL format:
             //   macOS/Linux: prts-cdn://localhost/{host}/{path}
             //   Windows:     http://prts-cdn.localhost/{host}/{path}
@@ -106,23 +137,39 @@ pub fn run() {
                 return;
             }
 
-            let query = uri.query().map(|q| format!("?{}", q)).unwrap_or_default();
+            let query = uri
+                .query()
+                .map(|q| {
+                    q.split('&')
+                        .filter(|part| *part != "arkstage-refresh=1")
+                        .collect::<Vec<_>>()
+                        .join("&")
+                })
+                .filter(|q| !q.is_empty())
+                .map(|q| format!("?{q}"))
+                .unwrap_or_default();
             let target_url = format!("https://{}{}", path, query);
 
             let media_root = media::media_root(&data_root::data_root());
 
             // 1) Serve from local content-addressed store if present (offline).
-            if let Some(bytes) = media::read_local_validated(&media_root, &target_url) {
-                // Sniff: a `.png` key may hold WebP bytes after compression.
-                let ct = sniff_content_type(&bytes, path);
-                let r = tauri::http::Response::builder()
-                    .status(200)
-                    .header("Content-Type", ct)
-                    .header("Access-Control-Allow-Origin", "*")
-                    .body(bytes)
-                    .unwrap();
-                responder.respond(r);
-                return;
+            let cached = media::read_local_validated(&media_root, &target_url);
+            let refresh = uri
+                .query()
+                .is_some_and(|q| q.split('&').any(|part| part == "arkstage-refresh=1"));
+            if !refresh || !net::allow_online() {
+                if let Some(bytes) = cached {
+                    // Sniff: a `.png` key may hold WebP bytes after compression.
+                    let ct = sniff_content_type(&bytes, path);
+                    let r = tauri::http::Response::builder()
+                        .status(200)
+                        .header("Content-Type", ct)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(bytes)
+                        .unwrap();
+                    responder.respond(r);
+                    return;
+                }
             }
 
             // 2) Not cached and offline mode: refuse with a marker the frontend detects.
@@ -142,6 +189,25 @@ pub fn run() {
             let path = path.to_string();
             tauri::async_runtime::spawn(async move {
                 let path = path.as_str();
+                if refresh {
+                    match http_cache::fetch(&target_url, cached.as_deref()).await {
+                        Ok(result) => {
+                            if let Err(error) =
+                                media::validate_asset_bytes(&target_url, &result.bytes)
+                            {
+                                respond_or_fallback(responder, 502, error, cached, path);
+                                return;
+                            }
+                            if !result.not_modified {
+                                let _ = media::write_local(&media_root, &target_url, &result.bytes);
+                            }
+                            http_cache::remember(&target_url, &result);
+                            respond_asset(responder, result.bytes, path, false);
+                        }
+                        Err(error) => respond_or_fallback(responder, 502, error, cached, path),
+                    }
+                    return;
+                }
                 let client = net::client();
                 match client
                     .get(&target_url)
@@ -154,19 +220,19 @@ pub fn run() {
                             Ok(bytes) => {
                                 if let Err(error) = media::validate_asset_bytes(&target_url, &bytes)
                                 {
-                                    respond_err(
+                                    respond_or_fallback(
                                         responder,
                                         502,
                                         format!("Invalid upstream asset: {error}"),
+                                        cached,
+                                        path,
                                     );
                                     return;
                                 }
                                 // Real-time compression: when a tier is enabled and
                                 // this is an image, store + serve the WebP bytes.
-                                let stored = compress::maybe_transcode_image(
-                                    &target_url,
-                                    bytes.to_vec(),
-                                );
+                                let stored =
+                                    compress::maybe_transcode_image(&target_url, bytes.to_vec());
                                 let _ = media::write_local(&media_root, &target_url, &stored);
                                 let ct = sniff_content_type(&stored, path);
                                 let r = tauri::http::Response::builder()
@@ -177,14 +243,32 @@ pub fn run() {
                                     .unwrap();
                                 responder.respond(r);
                             }
-                            Err(e) => respond_err(responder, 502, format!("Read error: {}", e)),
+                            Err(e) => respond_or_fallback(
+                                responder,
+                                502,
+                                format!("Read error: {}", e),
+                                cached,
+                                path,
+                            ),
                         }
                     }
                     Ok(resp) => {
                         let status = resp.status().as_u16();
-                        respond_err(responder, status, format!("Upstream returned {}", status));
+                        respond_or_fallback(
+                            responder,
+                            status,
+                            format!("Upstream returned {}", status),
+                            cached,
+                            path,
+                        );
                     }
-                    Err(e) => respond_err(responder, 502, format!("Fetch error: {}", e)),
+                    Err(e) => respond_or_fallback(
+                        responder,
+                        502,
+                        format!("Fetch error: {}", e),
+                        cached,
+                        path,
+                    ),
                 }
             });
         })
@@ -202,7 +286,9 @@ pub fn run() {
                         data_root::init_fixed(dir);
                     }
                     Err(e) => {
-                        log::warn!("[data_root] external dir unavailable ({e}); using internal app_data");
+                        log::warn!(
+                            "[data_root] external dir unavailable ({e}); using internal app_data"
+                        );
                         if let Ok(dir) = app.path().app_data_dir() {
                             data_root::init_fixed(dir);
                         }
@@ -215,13 +301,21 @@ pub fn run() {
                     data_root::init(dir);
                 }
             }
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            diagnostics::init();
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Info)
+                    .max_file_size(512 * 1024)
+                    .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                    .targets([
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
+                            path: data_root::data_root().join("logs"),
+                            file_name: Some("runtime".into()),
+                        }),
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    ])
+                    .build(),
+            )?;
             // Register the managed download engine (bulk predownload jobs).
             download::init(app.handle());
             // Restore compression mode + resume an interrupted batch if any.
@@ -229,6 +323,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            playback_cache::ensure_playback_asset,
             // Wiki fetching
             wiki::fetch_story_index,
             wiki::fetch_story_page,
@@ -283,6 +378,9 @@ pub fn run() {
             data_root::reset_resource_dir,
             // External links (About page)
             open_external,
+            diagnostics::record_diagnostic,
+            diagnostics::read_diagnostics,
+            diagnostics::export_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

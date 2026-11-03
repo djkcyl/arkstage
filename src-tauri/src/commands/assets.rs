@@ -87,19 +87,13 @@ pub async fn refresh_engine_asset(url: String, filename: String) -> Result<Asset
 
     let refreshed = async {
         crate::net::ensure_online()?;
-        let resp = crate::net::client()
-            .get(&url)
-            .header("Referer", "https://prts.wiki/")
-            .send()
-            .await
-            .map_err(|e| format!("Failed to refresh {filename}: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("HTTP {} refreshing {url}", resp.status()));
+        let result = crate::http_cache::fetch(&url, cached.as_deref()).await?;
+        validate_engine_asset(&filename, &result.bytes)?;
+        if !result.not_modified {
+            atomic_write(&path, &result.bytes)?;
         }
-        let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
-        validate_engine_asset(&filename, &bytes)?;
-        atomic_write(&path, &bytes)?;
-        Ok::<Vec<u8>, String>(bytes)
+        crate::http_cache::remember(&url, &result);
+        Ok::<Vec<u8>, String>(result.bytes)
     }
     .await;
 

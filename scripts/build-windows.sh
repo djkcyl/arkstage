@@ -12,7 +12,7 @@
 #   - Tauri marks cross-compilation as experimental; the installer is unsigned.
 #   - First run downloads nsis_tauri_utils.dll from GitHub (needs network).
 #
-# The finished installer is copied into the PROJECT ROOT, and the (large)
+# The finished installer is copied into build/artifacts/, and the (large)
 # intermediate cross-compile target dir is removed afterwards. Set KEEP_TARGET=1
 # to keep it for faster rebuilds.
 #
@@ -64,8 +64,9 @@ echo "==> Building (no --bundles: tauri picks the target's bundlers; MSI is skip
 export VITE_DEBUG_DEFAULT="${VITE_DEBUG_DEFAULT:-false}"
 npm run tauri:build -- --target x86_64-pc-windows-gnu
 
-installer="$(ls -1 "$TRIPLE_DIR/release/bundle/nsis/"*-setup.exe 2>/dev/null | head -1 || true)"
-if [ -z "$installer" ]; then
+installer_name=$(node -p 'const config = require("./src-tauri/tauri.conf.json"); config.productName + "_" + config.version + "_x64-setup.exe"')
+installer="$TRIPLE_DIR/release/bundle/nsis/$installer_name"
+if [ ! -f "$installer" ]; then
   echo "ERROR: no NSIS installer was produced under $TRIPLE_DIR/release/bundle/nsis" >&2
   exit 1
 fi

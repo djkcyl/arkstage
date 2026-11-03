@@ -6,6 +6,8 @@
  * and exposes them to an on-screen overlay (DebugConsole) the user can read/screenshot.
  */
 
+import { invoke } from "@tauri-apps/api/core";
+
 export type LogLevel = "log" | "info" | "warn" | "error";
 
 export interface LogEntry {
@@ -16,10 +18,49 @@ export interface LogEntry {
 }
 
 const MAX_ENTRIES = 500;
-const entries: LogEntry[] = [];
+const JOURNAL_KEY = "prts-diagnostic-journal-v1";
+const CHECKPOINT_KEY = "prts-playback-checkpoint-v1";
+interface PlaybackCheckpoint { title: string; stage: string; time: number }
+function readStored(key: string): unknown {
+  try { return JSON.parse(localStorage.getItem(key) || "null"); } catch { return null; }
+}
+const saved = readStored(JOURNAL_KEY);
+const entries: LogEntry[] = Array.isArray(saved) ? saved.filter((e): e is LogEntry => e && typeof e.time === "number"
+  && typeof e.msg === "string" && ["log", "info", "warn", "error"].includes(e.level)).slice(-MAX_ENTRIES) : [];
+const previous = readStored(CHECKPOINT_KEY) as PlaybackCheckpoint | null;
+let interrupted: PlaybackCheckpoint | null = previous && typeof previous.title === "string" && typeof previous.stage === "string"
+  && typeof previous.time === "number" ? previous : null;
 const listeners = new Set<() => void>();
 let seq = 0;
+for (const entry of entries) entry.id = seq++;
 let installed = false;
+
+function persistEntries(): void {
+  try {
+    let json = JSON.stringify(entries);
+    while (json.length > 128 * 1024 && entries.length > 1) { entries.shift(); json = JSON.stringify(entries); }
+    localStorage.setItem(JOURNAL_KEY, json);
+  } catch { /* Native journal remains available. */ }
+}
+function nativeLog(level: LogLevel, message: string): Promise<unknown> {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return Promise.resolve();
+  return invoke("record_diagnostic", { level, message });
+}
+
+export function getInterruptedPlayback(): PlaybackCheckpoint | null { return interrupted; }
+
+/** Flush both JS and native journals before calling GPU/decoder code. */
+export async function playbackCheckpoint(title: string, stage: string, detail = ""): Promise<void> {
+  const checkpoint = { title, stage, time: Date.now() };
+  try {
+    if (["disposed", "cancelled", "failed"].includes(stage)) localStorage.removeItem(CHECKPOINT_KEY);
+    else localStorage.setItem(CHECKPOINT_KEY, JSON.stringify(checkpoint));
+  } catch { /* Continue with the native journal. */ }
+  const message = `[playback] ${title} stage=${stage}${detail ? ` ${detail}` : ""}`;
+  appendLog("info", [message], false);
+  try { await nativeLog("info", message); }
+  catch (error) { pushLog("warn", "原生日志写入失败:", error); }
+}
 
 function fmt(a: unknown): string {
   if (a instanceof Error) return a.stack || `${a.name}: ${a.message}`;
@@ -43,11 +84,16 @@ function fmt(a: unknown): string {
   return String(a);
 }
 
-export function pushLog(level: LogLevel, ...args: unknown[]): void {
-  entries.push({ id: seq++, time: Date.now(), level, msg: args.map(fmt).join(" ") });
+function appendLog(level: LogLevel, args: unknown[], mirror: boolean): void {
+  const entry = { id: seq++, time: Date.now(), level, msg: args.map(fmt).join(" ").slice(0, 16_384) };
+  entries.push(entry);
   if (entries.length > MAX_ENTRIES) entries.shift();
+  persistEntries();
+  if (mirror) void nativeLog(level, entry.msg).catch(() => {});
   listeners.forEach((l) => l());
 }
+
+export function pushLog(level: LogLevel, ...args: unknown[]): void { appendLog(level, args, true); }
 
 export function getEntries(): readonly LogEntry[] {
   return entries;
@@ -55,6 +101,8 @@ export function getEntries(): readonly LogEntry[] {
 
 export function clearLog(): void {
   entries.length = 0;
+  interrupted = null;
+  persistEntries();
   listeners.forEach((l) => l());
 }
 
@@ -67,6 +115,10 @@ export function subscribe(listener: () => void): () => void {
 export function installGlobalCapture(): void {
   if (installed) return;
   installed = true;
+
+  if (interrupted) pushLog("warn", "[recovery] 上次阅读未正常结束，最后阶段:", interrupted);
+  try { localStorage.removeItem(CHECKPOINT_KEY); } catch { /* ignore */ }
+  pushLog("info", "[session]", navigator.userAgent, `viewport=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`);
 
   const origError = console.error.bind(console);
   const origWarn = console.warn.bind(console);

@@ -77,7 +77,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "方舟剧场 ${{ github.ref_name }}"
           releaseBody: "从下方 Assets 下载对应平台的安装包。"
-          releaseDraft: false
+          releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
 
@@ -168,5 +168,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
+          draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: dist-apk/*.apk

@@ -36,7 +36,7 @@ const LIANDONG_LINE = "联动"; // collab events — not in the 曲谱 StoryLine
 // Collab (联动) events, chronological by actId. They have no in-game StoryLine
 // (mixstory) entry, so they get a dedicated 联动 category instead of 特殊&未分类, with
 // covers from 活动一览's 标题图 (see tools/extract-covers/activity-banner-covers.json).
-const LIANDONG = ["好久不见", "源石尘行动", "落叶逐火", "水晶箭行动", "泰拉饭", "无忧梦呓", "泡影苍霆"];
+const LIANDONG = ["好久不见", "源石尘行动", "落叶逐火", "水晶箭行动", "泰拉饭", "无忧梦呓", "泡影苍霆", "月行水上"];
 const REPORT = process.argv.includes("--report");
 const UA = "ArkstageIndexGen/1.0 (+https://github.com/djkcyl/arkstage)";
 

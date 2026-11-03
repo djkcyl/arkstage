@@ -1,0 +1,39 @@
+/* 1280 × 720 AVG stage; controls follow the game's corner anchors rather than
+   the wiki widget's desktop toolbar. Only hit targets consume scene input. */
+.reader-hud-surface { position: absolute; inset: 0; pointer-events: none; z-index: 9998; color: #eee; }
+.reader-hud { position: absolute; top: 50%; left: 50%; width: 1280px; height: 720px; transform-origin: center; pointer-events: none; }
+.reader-hud button { position: absolute; height: 64px; padding: 0; border: 0; color: #e7e7e7; background: transparent; cursor: pointer; pointer-events: auto; font-family: "Noto Sans", "Microsoft YaHei", sans-serif; filter: drop-shadow(0 1px 3px #000); -webkit-tap-highlight-color: transparent; }
+.reader-hud button:focus-visible { outline: 2px solid #e8c77b; outline-offset: -3px; }
+.reader-hud button:disabled { opacity: .4; cursor: default; }
+.reader-hud img { position: absolute; object-fit: contain; pointer-events: none; }
+.reader-mode-label { position: absolute; display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 28px; line-height: 31px; white-space: nowrap; pointer-events: none; }
+.reader-auto-arrows { display: inline-flex; gap: 2px; }
+.reader-auto-arrows i, .reader-exit-arrow { display: inline-block; width: 0; height: 0; border-top: 8px solid transparent; border-bottom: 8px solid transparent; border-left: 8px solid currentColor; }
+.reader-auto-arrows i:nth-child(2) { animation: reader-auto-second 1.2s steps(1, end) infinite; }
+.reader-auto-arrows i:nth-child(3) { animation: reader-auto-third 1.2s steps(1, end) infinite; }
+/* Legacy PRTS timer_auto adds an arrow every 400ms, then starts over. */
+@keyframes reader-auto-second { 0% { opacity: 0; } 33.3333% { opacity: 1; } }
+@keyframes reader-auto-third { 0% { opacity: 0; } 66.6667% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .reader-auto-arrows i { animation: none; } }
+.reader-fast-forward { position: absolute; top: 15%; left: 50%; transform: translateX(-50%); padding: 5px 12px; background: #0008; font-size: 16px; white-space: nowrap; }
+.reader-reveal { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; pointer-events: auto; cursor: pointer; }
+.reader-dialog-backdrop { position: absolute; inset: 0; display: grid; place-items: center; background: #0009; pointer-events: auto; }
+.reader-dialog { box-sizing: border-box; width: min(420px, 90%); max-height: 85%; padding: 20px 24px; overflow: auto; border: 1px solid #64686c; background: #15191cf5; box-shadow: 0 8px 40px #0009; }
+.reader-dialog header { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 22px; font-size: 21px; letter-spacing: 3px; }
+.reader-dialog button { padding: 7px 16px; border: 1px solid #64686c; background: #ffffff0a; color: #eee; cursor: pointer; font: inherit; }
+.reader-dialog header button { font-size: 24px; border: 0; background: transparent; padding: 0 8px; }
+.reader-volume { display: flex; align-items: center; gap: 20px; margin-bottom: 24px; }
+.reader-volume input { flex: 1; min-width: 0; accent-color: #c9ba92; }
+.reader-menu-actions { display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+.reader-transcript { width: min(950px, 92%); height: 85%; display: flex; flex-direction: column; overflow: hidden; }
+.reader-transcript header { flex-shrink: 0; margin-bottom: 12px; }
+.reader-text-toggle { align-self: flex-start; flex-shrink: 0; margin-bottom: 12px; }
+.reader-log-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 0 12px 0 0; line-height: 1.7; user-select: text; }
+.reader-log-entries { list-style: none; padding: 0; margin: 0; }
+.reader-log-entry { padding: .85em 0; border-bottom: 1px solid #ffffff12; overflow-wrap: anywhere; }
+.reader-log-entry:first-child { padding-top: .25em; }
+.reader-log-entry:last-child { border-bottom: 0; }
+.reader-log-speaker { display: block; color: #aaaeb2; margin-bottom: .3em; white-space: pre-wrap; }
+.reader-log-text { margin: 0; white-space: pre-wrap; }
+@media (max-height: 480px) { .reader-transcript { padding: 10px 16px; height: 90%; max-height: 90%; } .reader-transcript header { margin-bottom: 6px; } .reader-text-toggle { margin-bottom: 6px; } }
+.reader-finished { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border: 1px solid #999; background: #15191cdd; color: #eee; padding: 14px 24px; pointer-events: auto; cursor: pointer; }

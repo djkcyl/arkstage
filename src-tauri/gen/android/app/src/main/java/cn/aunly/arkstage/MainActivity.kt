@@ -6,6 +6,12 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.webkit.WebView
+import android.view.ViewGroup
+import android.view.Gravity
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Button
+import java.io.File
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowInsetsCompat
@@ -25,9 +31,37 @@ class MainActivity : TauriActivity() {
   /** Capture the Wry WebView so the back handler can drive the SPA's JS history. */
   override fun onWebViewCreate(webView: WebView) {
     this.webView = webView
+    // Wry installs its protocol client after this callback. Posting preserves
+    // that client, including its custom-scheme and IPC handling.
+    webView.post {
+      if (Build.VERSION.SDK_INT >= 26) {
+        val delegate = webView.webViewClient
+        webView.webViewClient = DiagnosticWebViewClient(delegate) { view, detail ->
+          this.webView = null
+          immersive = false
+          applySystemBars()
+          (view.parent as? ViewGroup)?.removeView(view)
+          view.destroy()
+          val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(32, 32, 32, 32)
+          }
+          layout.addView(TextView(this).apply {
+            text = if (detail.didCrash()) "阅读器图形进程异常退出。诊断日志已保存，请导出后重新打开应用。" else "阅读器图形进程被系统结束，可能与内存不足有关。诊断日志已保存。"
+            textSize = 18f
+          })
+          layout.addView(Button(this).apply { text = "导出诊断日志"; setOnClickListener { CrashDiagnostics.share(this@MainActivity) } })
+          layout.addView(Button(this).apply { text = "关闭应用"; setOnClickListener { finishAndRemoveTask() } })
+          setContentView(layout)
+        }
+        CrashDiagnostics.write("WebView=${WebView.getCurrentWebViewPackage()?.versionName} renderer termination handler installed")
+      }
+    }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    CrashDiagnostics.init(this)
     // Edge-to-edge keeps the WebView layout stable behind the (kept-visible) system
     // bars. The bars stay visible everywhere EXCEPT the player, which calls
     // setReaderImmersive(true) so nothing occludes the fullscreen reader.
@@ -36,6 +70,21 @@ class MainActivity : TauriActivity() {
     applySystemBars()
     requestNotificationPermission()
     installBackHandler()
+  }
+
+  @Suppress("unused")
+  fun shareDiagnostics(path: String) {
+    runOnUiThread { CrashDiagnostics.share(this, File(path)) }
+  }
+
+  override fun onTrimMemory(level: Int) {
+    CrashDiagnostics.write("trim-memory level=$level")
+    super.onTrimMemory(level)
+  }
+
+  override fun onLowMemory() {
+    CrashDiagnostics.write("low-memory")
+    super.onLowMemory()
   }
 
   /**

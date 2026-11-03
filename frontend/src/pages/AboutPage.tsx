@@ -3,12 +3,16 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { getVersion } from "@tauri-apps/api/app";
 import { openExternal } from "../lib/external";
 import { GITHUB_URL, PRTS_URL } from "../lib/version";
+import projectLicense from "../../../LICENSE?raw";
+import licenseScope from "../../../LICENSE-SCOPE.md?raw";
 
 const DISCLAIMER = `方舟剧场（Arkstage）是一个非官方的《明日方舟》同人 / 学习性质的剧情离线回放器。
 
-剧情文本、立绘、音频、背景等素材均来自 PRTS Wiki，最终版权归《明日方舟》/ 上海鹰角网络（Hypergryph）所有。本应用本身不存储或分发上述素材，仅在运行时从 PRTS 获取并缓存到本地，供个人离线查阅。
+剧情文本、立绘、音频、背景、封面、图标等第三方素材来自 PRTS Wiki、上海鹰角网络（Hypergryph）或其他版权方，权利归各自权利人所有。剧情演出媒体主要在运行时获取并缓存；书架素材通过独立 resources 分支提供，部分界面图标随应用提供。
 
-请合理使用，避免对 PRTS 源站造成压力，切勿用于任何商业用途。本项目与鹰角网络、PRTS Wiki 均无隶属或合作关系，亦不对其内容的准确性负责。`;
+请合理使用，避免对 PRTS 源站造成压力，并遵守第三方授权。本项目与鹰角网络、PRTS Wiki 均无隶属或合作关系，亦不对其内容的准确性负责。
+
+${licenseScope}`;
 
 const MIT = `MIT License
 
@@ -29,8 +33,12 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER I
 AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.`;
 
-const LICENSE = `方舟剧场（Arkstage）的源代码在 GitHub 公开：
+const LICENSE = `方舟剧场（Arkstage）采用 AGPL-3.0-only。项目源码：
 ${GITHUB_URL}
+
+${projectLicense}
+
+第三方开源组件的独立许可声明
 
 应用打包并使用了以下开源组件，其许可证（全文如下）一并附带：
 
@@ -103,7 +111,7 @@ export default function AboutPage() {
             免责声明<span className="about-arrow">›</span>
           </button>
           <button className="about-row" onClick={() => setSp({ s: "license" })}>
-            开源许可<span className="about-arrow">›</span>
+            开源许可 · AGPL-3.0<span className="about-arrow">›</span>
           </button>
           <button className="about-row" onClick={() => setSp({ s: "upstream" })}>
             上游软件声明<span className="about-arrow">›</span>

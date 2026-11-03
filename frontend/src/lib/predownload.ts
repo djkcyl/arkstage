@@ -4,6 +4,9 @@ import { bootEngineInFrame, prewarmEngineDeps, refreshEngineDeps } from "./engin
 import type { WidgetBundle } from "./engineBoot";
 import { setManifestProgress } from "./keepalive";
 import { pushLog } from "./debugLog";
+import { modernEngineRevision } from "./modernEngine";
+import { ENGINE_ADAPTER_VERSION } from "./engineCache";
+import { reportLoading } from "./loadingProgress";
 
 /**
  * Predownload status. Indexing (manifest) and downloading run CONCURRENTLY now
@@ -69,6 +72,7 @@ interface RawStoryRuntime {
   story: { script: string; title: string };
   bundle: WidgetBundle;
   revision: string;
+  validationVersion?: string;
 }
 
 export interface StoryRuntime extends RawStoryRuntime {
@@ -92,7 +96,7 @@ export function loadBundle(): Promise<WidgetBundle> {
 async function refreshBundle(): Promise<WidgetBundle> {
   let cached: WidgetBundle | null = null;
   try {
-    for (const key of ["widget-bundle-v5", "widget-bundle-v4", "widget-bundle-v3", "widget-bundle-v2"]) {
+    for (const key of ["widget-bundle-v6", "widget-bundle-v5", "widget-bundle-v4", "widget-bundle-v3", "widget-bundle-v2"]) {
       const raw = await invoke<string | null>("load_from_cache", { key });
       if (!raw) continue;
       const candidate = JSON.parse(raw) as WidgetBundle;
@@ -112,17 +116,22 @@ async function refreshBundle(): Promise<WidgetBundle> {
     if (cached && isSuspiciousRegression(fresh, cached)) {
       throw new Error("PRTS 全局资源表数量异常回退，已拒绝覆盖本地可用版本");
     }
+    if (cached?.revision && cached.revision === fresh.revision && cached.validation_version === ENGINE_ADAPTER_VERSION) {
+      pushLog("info", "[runtime-update] shared engine unchanged; reuse verified snapshot");
+      return cached;
+    }
     await validateBundleBoot(fresh, "W2G/BEG");
+    fresh.validation_version = ENGINE_ADAPTER_VERSION;
     await invoke("save_to_cache", {
-      key: "widget-bundle-v5",
+      key: "widget-bundle-v6",
       data: JSON.stringify(fresh),
     }).catch(() => {});
-    await refreshEngineDeps();
+    if (!fresh.module_engine) await refreshEngineDeps();
     return fresh;
   } catch (error) {
     if (cached) {
       pushLog("warn", "[runtime-update] PRTS 候选引擎验证失败，保留上次可用版本:", error);
-      await refreshEngineDeps();
+      if (!cached.module_engine) await refreshEngineDeps();
       return cached;
     }
     throw error;
@@ -130,6 +139,7 @@ async function refreshBundle(): Promise<WidgetBundle> {
 }
 
 function isSuspiciousRegression(fresh: WidgetBundle, cached: WidgetBundle): boolean {
+  if (fresh.module_engine) return false;
   const a = fresh.diagnostics;
   const b = cached.diagnostics;
   if (!a || !b) return false;
@@ -155,11 +165,11 @@ export function loadStoryRuntime(title: string): Promise<StoryRuntime> {
 }
 
 async function refreshStoryRuntime(title: string): Promise<StoryRuntime> {
-  const key = `story-runtime-v5_${title.replace(/\//g, "_")}`;
+  const key = `story-runtime-v6_${title.replace(/\//g, "_")}`;
   const previousKey = `${key}-previous`;
   let cached: RawStoryRuntime | null = null;
   try {
-    for (const cacheKey of [key, previousKey, `story-runtime-v4_${title.replace(/\//g, "_")}`]) {
+    for (const cacheKey of [key, previousKey, `story-runtime-v5_${title.replace(/\//g, "_")}`, `story-runtime-v4_${title.replace(/\//g, "_")}`]) {
       const raw = await invoke<string | null>("load_from_cache", { key: cacheKey });
       if (!raw) continue;
       const candidate = JSON.parse(raw) as RawStoryRuntime;
@@ -172,23 +182,29 @@ async function refreshStoryRuntime(title: string): Promise<StoryRuntime> {
     // Continue with live fetch.
   }
   try {
+    reportLoading({ phase: "check", message: "正在检查剧情与演出引擎更新…" });
     const fresh = await invoke<RawStoryRuntime>("fetch_story_runtime", { pageTitle: title });
     if (cached && isSuspiciousRegression(fresh.bundle, cached.bundle)) {
       throw new Error("PRTS 当前同页快照完整性低于本地版本，已阻止覆盖");
     }
+    if (cached && cached.revision === fresh.revision && cached.validationVersion === ENGINE_ADAPTER_VERSION) {
+      pushLog("info", `[runtime-update] ${title}: unchanged; reuse verified snapshot`);
+      return { ...cached, source: "live" };
+    }
     // This is the promotion gate: execute the candidate in a disposable iframe
     // before it is allowed to replace last-known-good on disk.
     await validateRuntimeBoot(fresh, title);
+    fresh.validationVersion = ENGINE_ADAPTER_VERSION;
     if (cached && cached.revision !== fresh.revision) {
       await invoke("save_to_cache", { key: previousKey, data: JSON.stringify(cached) }).catch(() => {});
     }
     await invoke("save_to_cache", { key, data: JSON.stringify(fresh) }).catch(() => {});
-    await refreshEngineDeps();
+    if (!fresh.bundle.module_engine) await refreshEngineDeps();
     return { ...fresh, source: "live", fallback: cached ?? undefined };
   } catch (error) {
     if (cached) {
       pushLog("warn", `[runtime-update] ${title}: 候选快照验证失败，自动回退`, error);
-      await refreshEngineDeps();
+      if (!cached.bundle.module_engine) await refreshEngineDeps();
       return { ...cached, source: "cache", warning: String(error) };
     }
     // Upgrade path: preserve old v1.1.x script cache when the first v3 sync is
@@ -216,6 +232,11 @@ const REQUIRED_ENGINE_CAPABILITIES = ["Timer", "system", "data.init", "fun_sys_i
 export function validateBundleShape(bundle: WidgetBundle): string[] {
   const problems: string[] = [];
   if (!bundle || !Array.isArray(bundle.engine_scripts)) return ["快照格式无效"];
+  if (bundle.module_engine) {
+    if (!/^https:\/\/static\.prts\.wiki\/widgets\/.+\/StoryPlayer(?:\.[^/]+)?\.js$/.test(bundle.module_engine.entry_url)) problems.push("模块入口来源无效");
+    if (!bundle.data_blocks_html?.includes('id="datas_txt"')) problems.push("缺少剧情文本");
+    return problems;
+  }
   const diagnostics = bundle.diagnostics;
   for (const id of REQUIRED_DATA_BLOCKS) {
     if (!bundle.data_blocks_html?.includes(`id="${id}"`)) problems.push(`缺少 #${id}`);
@@ -253,7 +274,7 @@ function validateRuntimeShape(runtime: RawStoryRuntime): string[] {
 async function validateRuntimeBoot(runtime: RawStoryRuntime, title: string): Promise<void> {
   const problems = validateRuntimeShape(runtime);
   if (problems.length) throw new Error(`候选快照结构验证失败: ${problems.join("；")}`);
-  await validateCandidateBoot(runtime.bundle, runtime.story.script, title);
+  runtime.bundle.metadata_urls = await validateCandidateBoot(runtime.bundle, runtime.story.script, title);
 }
 
 async function validateBundleBoot(bundle: WidgetBundle, title: string): Promise<void> {
@@ -262,10 +283,10 @@ async function validateBundleBoot(bundle: WidgetBundle, title: string): Promise<
   const parsed = new DOMParser().parseFromString(bundle.data_blocks_html, "text/html");
   const script = parsed.getElementById("datas_txt")?.textContent || "";
   if (!script.trim()) throw new Error("候选引擎自带剧情脚本为空");
-  await validateCandidateBoot(bundle, script, title);
+  bundle.metadata_urls = await validateCandidateBoot(bundle, script, title);
 }
 
-async function validateCandidateBoot(bundle: WidgetBundle, script: string, title: string): Promise<void> {
+async function validateCandidateBoot(bundle: WidgetBundle, script: string, title: string): Promise<string[]> {
   const iframe = document.createElement("iframe");
   iframe.style.cssText = "position:fixed;left:-99999px;top:0;width:960px;height:540px;border:0;";
   document.body.appendChild(iframe);
@@ -280,6 +301,7 @@ async function validateCandidateBoot(bundle: WidgetBundle, script: string, title
     if (!result.manifest?.length) {
       throw new Error("候选引擎未能完成预加载资源解析");
     }
+    return result.health.metadataUrls ?? [];
   } finally {
     iframe.remove();
   }
@@ -557,8 +579,9 @@ export async function runPredownload(
     const bundle = await loadBundle();
     // Cache the engine deps once up-front (via Rust) so the parallel iframe boots
     // below all load jQuery/PreloadJS/toolbox from disk instead of the network.
-    await prewarmEngineDeps();
-    const engineAssetsRevision = await refreshEngineDeps();
+    if (!bundle.module_engine) await prewarmEngineDeps();
+    const engineAssetsRevision = bundle.module_engine
+      ? await modernEngineRevision(bundle.module_engine, bundle.metadata_urls) : await refreshEngineDeps();
     const runtimeRevision = `${bundle.revision || "legacy"}|${engineAssetsRevision}`;
     let pageRevisions: Record<string, string> = {};
     try {

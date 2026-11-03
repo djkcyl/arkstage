@@ -57,59 +57,41 @@ async fn fetch_page_raw(page: &str) -> Result<String, String> {
     crate::net::ensure_online()?;
     let encoded = urlencoding::encode(page);
     let url = format!("https://prts.wiki/w/{}", encoded);
+    let root = crate::data_root::data_root().join("cache/http-pages");
+    let valid_html = |bytes: &[u8]| {
+        bytes.len() <= 20 * 1024 * 1024
+            && std::str::from_utf8(bytes).is_ok_and(|text| {
+                text.to_ascii_lowercase().contains("<html") && text.contains("mw-parser-output")
+            })
+    };
+    let cached = crate::media::store_path(&root, &url)
+        .and_then(|path| std::fs::read(path).ok())
+        .filter(|bytes| valid_html(bytes));
     let mut last_error = String::new();
     for attempt in 1..=3 {
-        let response = crate::net::client()
-            .get(&url)
-            .header("Referer", "https://prts.wiki/")
-            .send()
-            .await;
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                if resp
-                    .content_length()
-                    .is_some_and(|len| len > 20 * 1024 * 1024)
-                {
-                    return Err(format!("PRTS response is unexpectedly large: {url}"));
-                }
-                let content_type = resp
-                    .headers()
-                    .get(reqwest::header::CONTENT_TYPE)
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                if !content_type.is_empty()
-                    && !content_type.contains("text/html")
-                    && !content_type.contains("application/xhtml")
-                {
+        match crate::http_cache::fetch(&url, cached.as_deref()).await {
+            Ok(result) => {
+                if !valid_html(&result.bytes) {
                     return Err(format!(
-                        "Unexpected PRTS content type {content_type}: {url}"
+                        "PRTS response is not a valid wiki HTML document: {url}"
                     ));
                 }
-                let bytes = resp
-                    .bytes()
-                    .await
-                    .map_err(|e| format!("Failed to read response: {e}"))?;
-                if bytes.len() > 20 * 1024 * 1024 {
-                    return Err(format!("PRTS response is unexpectedly large: {url}"));
+                if !result.not_modified {
+                    crate::media::write_local(&root, &url, &result.bytes)?;
                 }
-                let html = String::from_utf8(bytes.to_vec())
-                    .map_err(|_| format!("PRTS response is not UTF-8 HTML: {url}"))?;
-                if !html.to_ascii_lowercase().contains("<html") {
-                    return Err(format!(
-                        "PRTS response does not contain an HTML document: {url}"
-                    ));
-                }
-                return Ok(html);
+                crate::http_cache::remember(&url, &result);
+                log::info!(
+                    "[http-cache] wiki {}: {}",
+                    page,
+                    if result.not_modified {
+                        "unchanged"
+                    } else {
+                        "updated"
+                    }
+                );
+                return String::from_utf8(result.bytes).map_err(|error| error.to_string());
             }
-            Ok(resp) => {
-                let status = resp.status();
-                last_error = format!("HTTP {status}: {url}");
-                if status.is_client_error() && status.as_u16() != 429 {
-                    break;
-                }
-            }
-            Err(error) => last_error = format!("HTTP request failed: {error}"),
+            Err(error) => last_error = error,
         }
         if attempt < 3 {
             tokio::time::sleep(Duration::from_millis(attempt * 350)).await;
@@ -206,6 +188,32 @@ pub async fn fetch_story_runtime(page_title: String) -> Result<StoryRuntimeData,
 fn widget_from_html(html: &str) -> Result<WidgetBundleData, String> {
     let bundle = story_page::extract_widget_html(html);
 
+    // New wiki releases publish an ESM entry and fetch their own data sidecars.
+    // They must not depend on the deprecated inline player's DOM or data tables.
+    if let Some(module) = &bundle.module_engine {
+        if !bundle.data_block_ids.iter().any(|id| id == "datas_txt") {
+            return Err("Module player is missing #datas_txt".to_string());
+        }
+        let descriptor = serde_json::to_vec(module).map_err(|e| e.to_string())?;
+        let revision = sha256_parts(&[bundle.data_blocks_html.as_bytes(), &descriptor]);
+        return Ok(WidgetBundleData {
+            dom_html: bundle.dom_html,
+            data_blocks_html: bundle.data_blocks_html,
+            engine_scripts: bundle.engine_scripts,
+            module_engine: bundle.module_engine,
+            revision,
+            diagnostics: WidgetDiagnostics {
+                data_block_ids: bundle.data_block_ids,
+                dom_element_ids: bundle.dom_element_ids,
+                background_entries: bundle.background_entries,
+                character_entries: bundle.character_entries,
+                audio_entries: bundle.audio_entries,
+                link_groups: bundle.link_groups.unwrap_or_default(),
+                ..Default::default()
+            },
+        });
+    }
+
     if bundle.engine_scripts.is_empty() {
         return Err("No engine scripts found on page".to_string());
     }
@@ -295,6 +303,7 @@ fn widget_from_html(html: &str) -> Result<WidgetBundleData, String> {
         dom_html: bundle.dom_html,
         data_blocks_html: bundle.data_blocks_html,
         engine_scripts: bundle.engine_scripts,
+        module_engine: None,
         revision,
         diagnostics: WidgetDiagnostics {
             data_block_ids: bundle.data_block_ids,
@@ -322,6 +331,14 @@ fn sha256_parts(parts: &[&[u8]]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn module_runtime_does_not_require_classic_engine_globals_or_tables() {
+        let bundle = widget_from_html(r#"<pre id="datas_txt">story</pre>
+          <script type="module" src="https://static.prts.wiki/widgets/production/StoryPlayer.test.js"></script>"#).unwrap();
+        assert!(bundle.module_engine.is_some());
+        assert!(!bundle.revision.is_empty());
+    }
 
     /// Opt-in real network smoke test:
     /// `PRTS_LIVE_NETWORK=1 cargo test live_story_runtime`.

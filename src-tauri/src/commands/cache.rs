@@ -245,6 +245,8 @@ fn delete_chapter_cache_in(root: &Path, titles: &[String]) -> DeleteResult {
             runtime_filename(t, 4, false),
             runtime_filename(t, 5, false),
             runtime_filename(t, 5, true),
+            runtime_filename(t, 6, false),
+            runtime_filename(t, 6, true),
         ] {
             let path = cache.join(f);
             if let Ok(meta) = std::fs::metadata(&path) {
@@ -390,6 +392,8 @@ mod tests {
             runtime_filename("Ch/A", 4, false),
             runtime_filename("Ch/A", 5, false),
             runtime_filename("Ch/A", 5, true),
+            runtime_filename("Ch/A", 6, false),
+            runtime_filename("Ch/A", 6, true),
         ] {
             fs::write(cache.join(path), "{}").unwrap();
         }
@@ -411,9 +415,11 @@ mod tests {
         assert!(!cache.join(story_filename("Ch/A")).exists());
         assert!(!cache.join(runtime_filename("Ch/A", 5, false)).exists());
         assert!(!cache.join(runtime_filename("Ch/A", 5, true)).exists());
+        assert!(!cache.join(runtime_filename("Ch/A", 6, false)).exists());
+        assert!(!cache.join(runtime_filename("Ch/A", 6, true)).exists());
         assert!(cache.join(manifest_filename("Ch/B")).exists());
-        // 1 media + manifest + script + four runtime generations.
-        assert_eq!(r.deleted_files, 7);
+        // 1 media + manifest + script + six runtime snapshots.
+        assert_eq!(r.deleted_files, 9);
         assert_eq!(r.stories_cleared, 1);
         let _ = fs::remove_dir_all(&root);
     }

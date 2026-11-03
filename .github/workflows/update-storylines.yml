@@ -4,7 +4,14 @@
 name: update-bookshelf-resources
 
 on:
+  schedule:
+    - cron: "0 14 * * *" # UTC 14:00 = Asia/Shanghai 22:00
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild the payload even if input fingerprints are unchanged"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -15,53 +22,66 @@ concurrency:
 
 jobs:
   update-storylines:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          sparse-checkout: |
+            tools
+            LICENSE
+            LICENSE-SCOPE.md
+          sparse-checkout-cone-mode: false
 
-      - name: Install deps
+      # The hosted runner already has Node >=20. Do not install npm packages,
+      # image tools or fetch the image branch until the cheap probe finds work.
+      - name: Check upstream revisions and image hashes
+        id: probe
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/build-resources/sync-resources.mjs
+
+      - name: Install parser dependencies
+        if: steps.probe.outputs.changed == 'true' || inputs.force == true
         working-directory: tools/gen-index
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
-      - name: Regenerate StoryLine taxonomy
-        run: node tools/gen-index/gen-storylines.mjs
-
-      - name: Build covers and resource payload
+      - name: Ensure image tools
+        if: steps.probe.outputs.changed == 'true' || inputs.force == true
         run: |
-          node tools/extract-covers/extract-mixstory-kv.mjs
-          node tools/extract-covers/extract-banner-covers.mjs
-          node tools/extract-covers/extract-chapter-banners.mjs
-          node tools/build-resources/build-bookshelf-resources.mjs /tmp/arkstage-resources
-
-      - name: Commit taxonomy source if changed
-        run: |
-          git config user.name "arkstage-index[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add tools/build-resources/storylines.json
-          if git diff --cached --quiet; then
-            echo "Taxonomy already up to date — nothing to commit."
-          else
-            git commit -m "chore(taxonomy): refresh storylines from prts.wiki [skip ci]"
-            git push
+          if ! command -v convert >/dev/null || ! command -v identify >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends imagemagick
           fi
 
-      - name: Publish resources branch
+      - name: Load the current resource branch
+        if: steps.probe.outputs.changed == 'true' || inputs.force == true
         run: |
-          git fetch origin resources
-          git worktree add -B resources /tmp/arkstage-resources-branch origin/resources
-          rsync -a --delete --exclude=.git /tmp/arkstage-resources/ /tmp/arkstage-resources-branch/
-          cd /tmp/arkstage-resources-branch
+          git fetch origin resources --depth=1
+          git worktree add --detach "$RUNNER_TEMP/arkstage-resources-base" FETCH_HEAD
+
+      - name: Incrementally update taxonomy, covers and banners
+        if: steps.probe.outputs.changed == 'true' || inputs.force == true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/build-resources/sync-resources.mjs --update --base="$RUNNER_TEMP/arkstage-resources-base" --out="$RUNNER_TEMP/arkstage-resources-new"
+
+      - name: Publish resources branch
+        if: steps.probe.outputs.changed == 'true' || inputs.force == true
+        run: |
+          rsync -a --delete --exclude=.git "$RUNNER_TEMP/arkstage-resources-new/" "$RUNNER_TEMP/arkstage-resources-base/"
+          cd "$RUNNER_TEMP/arkstage-resources-base"
           git config user.name "arkstage-index[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
             echo "Runtime resources already up to date — nothing to publish."
           else
-            git commit -m "data: publish runtime bookshelf resources [skip ci]"
-            git push origin resources
+            git commit -m "data: incrementally sync bookshelf resources [skip ci]"
+            git push origin HEAD:resources
           fi
+
+      - name: Report no changes
+        if: steps.probe.outputs.changed != 'true' && inputs.force != true
+        run: echo "No upstream changes; skipped npm install, image downloads, conversions and publishing."

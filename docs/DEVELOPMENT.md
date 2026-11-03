@@ -12,12 +12,20 @@ resources@GitHub ─jsDelivr/GitHub Raw─▶ 书架元数据/封面    图片�
 ```
 
 - **Rust 后端**抓取并解析剧情目录与剧本，管理缓存，并提供自定义 `prts-cdn://` 协议：所有上游请求统一经 `net::client()` 发送，使用可识别且含项目联系地址的 `Arkstage/<version>` User-Agent；命中本地的内容寻址仓库（`$APPDATA/media/{host}/{path}`）即离线返回，未命中时（且允许联网）带正确 Referer 拉取并落盘。PRTS 会拒绝伪装成通用浏览器的自动请求，因此不要把共享 User-Agent 改回 Chrome/Firefox 字符串。
-- **前端**在隔离的 `<iframe>` realm 中启动原版引擎（每个剧情独立 realm，避免引擎顶层 `const` 冲突），并复用引擎自身的 `fun_sys_preload()` 精确枚举某剧情所需资源用于预下载。
+- **前端**在隔离的 `<iframe>` realm 中启动原版引擎。新版页面动态发现带哈希的 ESM 入口、递归缓存模块依赖，并复用引擎自身的资源收集器生成预下载清单；旧版页面保留 `fun_sys_preload()` 路径。
 - **书架资源**不进入安装包：`BookshelfMetadataContext` 先读 `cache/bookshelf-metadata.json`，每次启动再以 `cache: no-store` 刷新 jsDelivr；网络或格式失败则自动改走 `raw.githubusercontent.com`。只有通过完整校验的响应才会覆盖内存和缓存；双线路都失败时保留旧缓存并显示可重试提示。封面/横幅同样在首选源加载失败后切换另一源，使用哈希文件名并经 `prts-cdn://` 懒加载到内容寻址缓存，因此离线可复用，更新分类或封面无需发版。
-- **PRTS 演出运行时**使用同页原子快照：播放时从同一个响应提取剧情脚本、全部 `datas_*` 表和内联引擎，SHA-256 版本校验后写入 `story-runtime-v3`；外部 JS/CSS 每次应用生命周期热更新，完整性失败保留 last-known-good。引擎启动前会从 `datas_char` 为 `datas_link` 尚未收录的新角色补齐缺失分组，并静态审计立绘/背景/CG 引用。
+- **PRTS 演出运行时**使用同页原子快照：从同一个响应提取剧情脚本与模块入口，校验并通过隔离启动测试后写入 `story-runtime-v6`，保留上一代快照供失败回滚。`engineModule.ts` 使用 Acorn 按语法结构发现播放器、上下文和预加载 API，不固定上游哈希文件名或压缩变量名；删除入口中的外置 Vue UI 挂载，只桥接演出引擎。无哈希的角色、背景和变量 JSON 每次启动刷新，离线或无效响应回退本地缓存；模块和数据指纹一同决定清单是否失效。Pixi 使用当前 iframe 的资源加载器，使媒体、字体和模块均经过本地协议缓存。
+- **顶部覆盖层**由 `PlayerHUD.tsx` 提供，按游戏的 1280×720 舞台比例缩放，使用客户端 AVG 按钮图标、角点锚定坐标和触摸热区；不挂载 PRTS 的外置工具栏。设置、日志、隐藏、速度与自动调用原引擎控制器；右上“退出”直接离开播放器页面。自动模式按旧版 PRTS 的 400ms 节奏循环显示一至三个箭头。`tools/extract-player-ui.py` 可从官方 APK 复现导出，依赖 UnityPy 1.25.4 和 Pillow；产物来源见 `frontend/src/assets/player-ui/README.md`。
+- **LOG**以独立条目展示角色名与正文，标题和关闭按钮固定，已读记录打开时定位到末尾，全部文本从头查看。`playerTranscript.ts` 保留原脚本行号，按引擎当前行截取已读范围。字号在应用设置页调整并持久化到本地，范围 12–32px，不在播放器中新增字号控件。
+- **比例与输入**：原版逻辑画布固定为 1280×720，宿主舞台按 16:9 等比居中，宽屏/竖屏留黑边，HUD 与画布共享相同位置和缩放，禁止分别撑满宽高。手动显示“手动”并隐藏倍速框，开启自动后才显示“自动”和速度框。长按场景 350ms 或按住 Ctrl 调用原引擎最高档 `quick_play`；松开、取消触摸、拖动、失焦或离开页面均释放，恢复此前模式与自动速度，并吞掉长按后的额外点击。快进保留选项等待，释放后也不会因选项缓存恢复而继续快进。
+- **移动端稳定性**：桥接层将上游优先 WebGPU 的画布改为 WebGL，关闭 MSAA，初始和旋转/缩放后的渲染分辨率均限制在 1.5 倍以内。剧情清单仍包含全部音频；播放初始化不提前解码整章音频，而由原音频引擎按需加载，图片按两项一批预热，减少解码峰值。
+- **崩溃诊断**：前端环形日志与播放阶段同步保留到本地存储，关键阶段等待 Rust `logs/diagnostics.log` 落盘后才进入 GPU/解码路径；发布版同样启用原生日志。Android 捕获 Java 未处理异常、WebView 渲染进程终止及 API 30+ 历史进程退出原因。渲染进程终止后展示原生导出界面，避免默认处理连带杀死宿主；重启后可在设置或自动打开的恢复日志中复制/导出完整诊断。日志轮换限制大小，不依赖用户提前开启控制台。
+- **慢网络保护**：Wry 0.54.4 的 Android 自定义协议等待上限为 10 秒，超时会 panic。`ensure_playback_asset` 在异步 IPC 中准备引擎、图片、字体和按需音频，再由协议读取本地文件；相同 URL 合并请求、最多四个并行网络下载，图片压缩在阻塞线程池运行。所有协议响应另设独立的 8 秒截止保护，超时返回 504，迟到的响应被丢弃，不再触发 Wry 的 unwrap。
+- **引擎增量缓存**：新版 `StoryPlayer.<hash>.js` 发布入口、CSS 和 polyfill 描述共同标识模块版本；`engineCache.ts` 将桥接器版本、路由作用域和源内容摘要纳入持久化缓存，无更新时跳过依赖重读和 AST 重建。同页快照 revision 与验证版本均未变时不重复验证或写盘；无哈希数据表、旧版依赖及 wiki HTML 用绑定本地内容 SHA 的 ETag / Last-Modified 条件 GET，304 和相同的 200 内容均不重写资源。新数据表仍参与预下载清单版本计算，离线及网络失败保留已验证缓存。
+- **外部依赖兼容**：每个引擎 iframe 加载 toolbox 后执行 `installEngineCompatibility`，补齐新版工具库删掉、但音频 `fade()` 仍调用的 `Math.clamp`。已有实现保留，兼容补丁不修改应用主窗口。使用 `npm run test:engine` 回归验证；设置 `PRTS_TOOLBOX_FIXTURE=/path/to/krliov.toolbox.js` 可直接校验下载的上游工具库。
 - **预下载同步校验**先批量查询 MediaWiki oldid；只有页面 oldid、全局表哈希和外部引擎哈希全部匹配的 v2 manifest 才会复用。媒体下载与协议缓存会校验文件魔数并原子写入，HTML 错误页、空文件和中断文件会被删除后重新拉取。
 
-更详细的设计见 [`docs/superpowers/specs`](superpowers/specs) 与 [`docs/superpowers/plans`](superpowers/plans)；架构约定见仓库根 [`CLAUDE.md`](../CLAUDE.md)。
+更详细的设计见 [`docs/superpowers/specs`](superpowers/specs) 与 [`docs/superpowers/plans`](superpowers/plans)。
 
 ## 环境要求
 
@@ -59,6 +67,14 @@ npm run dev            # 仅启动前端（Vite，浏览器调试用；引擎相
 npm run build          # 仅构建前端（tsc + vite）
 npm run lint           # ESLint
 npm run test:metadata  # 书架元数据校验与 jsDelivr → GitHub 回退单测
+npm run test:engine    # 演出工具库兼容与音频淡出回归测试
+npm run test:modules   # ESM 依赖解析、动态 API 桥接和外置 UI 隔离
+npm run test:diagnostics # 进程重启后的日志与检查点恢复、日志大小限制
+npm run test:playback  # 手动/自动、临时快进恢复和选项等待
+npm run test:transcript # LOG 分行、已读范围、字号持久化与边界
+npm run test:cache     # 引擎持久化复用、版本变动与损坏缓存
+npm ci --prefix tools/gen-index --no-audit --no-fund
+npm run test:resources # 资源快速探测、自动发现、仅变化资源下载
 
 # —— 仅后端（Rust / Tauri）——
 cargo test  --manifest-path src-tauri/Cargo.toml   # 后端单元测试
@@ -152,8 +168,8 @@ scripts/run-tests.sh     # 以上全部
 ## CI / Release
 
 - **CI**（`.github/workflows/ci.yml`）：每次 push / PR 运行静态检查；push 时额外为各平台构建安装包并作为 Workflow 产物上传（即「CI 版」）。
-- **Release**（`.github/workflows/release.yml`）：推送 `v*` 版本标签时，为 Android(arm64-v8a APK) / Windows / macOS(Intel + Apple Silicon) / Linux 构建并发布到对应 GitHub Release 的 Assets。标签含连字符（如 `v1.0.0-beta.1`）发布为 **pre-release**。
-- **书架资源**（`.github/workflows/update-storylines.yml`）：手动运行后从 PRTS 重建 StoryLine 分类、从 ArknightsAssets2/PRTS 提取封面和横幅、生成内容哈希清单，并发布到独立 `resources` 分支。客户端下一次启动优先通过 jsDelivr 获取，失败时回退 GitHub Raw。
+- **Release**（`.github/workflows/release.yml`）：推送 `v*` 版本标签时，为 Android(arm64-v8a APK) / Windows / macOS(Intel + Apple Silicon) / Linux 构建并上传到对应 GitHub Release 草稿的 Assets，核对构建结果、签名和发布说明后再正式发布。标签含连字符（如 `v1.0.0-beta.1`）发布为 **pre-release**。
+- **书架资源自动更新**（`.github/workflows/update-storylines.yml`）：北京时间每天 22:00（UTC `0 14 * * *`）及手动触发。先用少量批量请求检查 wiki 修订号、活动数据、KV Git blob SHA 和图片 SHA；无变化时跳过 npm、图像工具、资源分支检出、图片下载和发布。有变化时按内容签名复用旧产物，只转换变动图片，发布到独立 `resources` 分支。平台调度可能受队列影响。工作流仅在 resources 分支提交分类和图像更新，不直接向 master 提交。
 
 本地生成同一份资源负载：
 
@@ -165,9 +181,11 @@ node tools/extract-covers/extract-chapter-banners.mjs
 node tools/build-resources/build-bookshelf-resources.mjs build/resources
 ```
 
-新增乐章部署时，先运行 `gen-storylines.mjs --report` 确认新书名及所属 StoryLine，再同步两份人工校验映射：`tools/extract-covers/kv-map.json` 对应 ArknightsAssets2 的 `mixstory/kvs/kv_*.png`，`tools/extract-covers/chapter-banner-map.json` 对应活动页面 `活动信息` 模板中的 `标题图文件名`。生成后必须确认 `metadata.json` 同时包含新书名、`covers[书名]` 和 `banners[书名]`，再发布 `resources` 分支。所有读取 PRTS 的 Node 脚本也必须发送可识别且含项目联系地址的 Arkstage User-Agent；通用 Node/浏览器 UA 会被边缘防护拒绝为 403。
+自动同步使用 `node tools/build-resources/sync-resources.mjs` 探测；更新时运行 `--update --base=<当前 resources 检出目录> --out=<独立输出目录>`。探测结果暂存 `build/resource-sync/probe.json`，成功输出包含 `automation-state.json`，供下一次检测和图片复用。脚本从曲谱实际章节发现新增分类，从剧情一览发现主线，从 PRTS 语义活动查询发现新联动及横幅文件名。已知 KV 映射优先使用游戏竖封面；新增活动没有 KV 映射时自动使用 PRTS 横幅，不需要为了新活动手工补横幅映射。需要提升为原生 KV 时仍可维护 `kv-map.json`。新增故事缺少分类或图像、上游接口异常、源 SHA 在下载期间变动等情况均中止发布并保留旧分支，不猜测分类或发布残缺资源。
 
-⚠️ **发版铁律**：发版前必须把 `package.json` 的 `version` 一并 bump 到 master 再打标签。应用内「检测更新」的首选源读取的就是 master 上 `package.json` 的 `version`（`cdn.jsdelivr.net/gh/<repo>@master/package.json`），漏 bump 会导致检测不到新版本。
+`LICENSE` 保留完整 AGPL-3.0-only 正文并附授权范围；`LICENSE-SCOPE.md` 明确排除 PRTS、鹰角及其他第三方代码/素材。关于页通过 raw import 内置这两个仓库文件，资源分支同样携带说明。变更法律声明时须同步 README 中的范围与责任说明。
+
+⚠️ **发版铁律**：发版前必须在 dev 或专用分支同步更新 `package.json`、锁文件和 Tauri/Cargo 版本，通过 PR 合入 master 后再打标签；禁止直接向 master 提交。应用内「检测更新」的首选源读取的就是 master 上 `package.json` 的 `version`（`cdn.jsdelivr.net/gh/<repo>@master/package.json`），漏 bump 会导致检测不到新版本。
 
 ```bash
 # 正式版
@@ -175,3 +193,5 @@ git tag v1.0.0 && git push origin v1.0.0
 # 预发布版
 git tag v1.0.0-beta.1 && git push origin v1.0.0-beta.1
 ```
+
+Git 操作限制见仓库根 AGENTS.md。用户未明确要求时，不运行任何 Git 命令，也不通过脚本、API 或云端自动化间接执行。
