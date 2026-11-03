@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "17a0cd5c033f5dfc8898",
+  "version": "f77f9083c2251d03e02c",
   "storylines": [
     [
       "为了明日",
@@ -1103,6 +1103,11 @@
     },
     "骑兵与猎人": {
       "path": "banners/ab365d8afb7b5c1243a2.webp",
+      "width": 560,
+      "height": 179
+    },
+    "丛林症结": {
+      "path": "banners/88bab64347c4ab3da54e.webp",
       "width": 560,
       "height": 179
     }
