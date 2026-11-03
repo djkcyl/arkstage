@@ -1,4 +1,5 @@
 import { parse } from "acorn";
+import { installMusicContinuity } from "./musicContinuity.js";
 
 // Discover capabilities by syntax and public object keys. Upstream chunk hashes,
 // minified identifiers and import aliases are deliberately not part of this API.
@@ -155,6 +156,16 @@ export function buildEngineModule(source: string, entryUrl: string, modules: Rea
   const soundAssignment = descendants(ast, (n) => n.type === "AssignmentExpression"
     && name(child(child(n, "left"), "property")) === "disableAutoPause")[0];
   const sound = name(child(child(soundAssignment, "left"), "object"));
+  const isMusicClass = (n: Syntax) => ["ClassDeclaration", "ClassExpression"].includes(n.type)
+    && ["playMusic", "stopMusic", "createPlayback", "getSound", "destroy"].every(key =>
+      children(child(n, "body")!, "body").some(method => name(child(method, "key")) === key));
+  const audioClass = top.find(isMusicClass);
+  const audioBinding = top.filter(n => n.type === "VariableDeclaration")
+    .flatMap(n => children(n, "declarations")).find(n => {
+      const init = child(n, "init");
+      return !!init && isMusicClass(init);
+    });
+  const audioName = name(child(audioClass ?? audioBinding, "id"));
   walk(ast, (n) => {
     if (["ImportDeclaration", "ExportNamedDeclaration", "ExportAllDeclaration", "ImportExpression"].includes(n.type)) {
       const spec = child(n, "source");
@@ -172,7 +183,8 @@ export function buildEngineModule(source: string, entryUrl: string, modules: Rea
   const activeEdits = edits.filter((edit) => !bootstrap.some((b) => edit.start > b.start && edit.end < b.end));
   let output = source;
   for (const edit of activeEdits.sort((a, b) => b.start - a.start)) output = output.slice(0, edit.start) + edit.text + output.slice(edit.end);
-  return `${output}\n${assets}.setPreferences?.({preferWorkers: false});\nexport const arkstageEngine = {
+  return `${output}\n${assets}.setPreferences?.({preferWorkers: false});\n${audioName ? `(${installMusicContinuity.toString()})(${audioName}.prototype, url => ${assets}.unload(url));` : ""}\nexport const arkstageEngine = {
+    musicContinuity: ${!!audioName},
     createPlayer: ${factory}, loadContext: ${contextLoader},
     async preload(context, onProgress) {
       const originalLoad = ${assets}.load;

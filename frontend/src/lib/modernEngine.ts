@@ -44,6 +44,7 @@ interface NativePlayer {
 }
 
 interface EngineBridge {
+  musicContinuity?: boolean;
   loadContext(script: string): Promise<unknown>;
   createPlayer(context: unknown): NativePlayer;
   preload(context: unknown, onProgress?: (progress: number) => void): Promise<void>;
@@ -237,7 +238,9 @@ export async function bootModernEngineInFrame(opts: FrameBootOptions): Promise<F
   const doc = opts.iframe.contentDocument;
   if (!win || !doc) throw new Error("PRTS 模块播放器容器不可用");
   doc.open();
-  doc.write('<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}body{display:flex;align-items:center;justify-content:center}#arkstage-stage{position:relative;width:min(100vw,calc(100vh * 16 / 9));height:min(100vh,calc(100vw * 9 / 16));overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}canvas{display:block}</style></head><body><div id="arkstage-stage"></div></body></html>');
+  // The scene is focusable for keyboard input. Without its own outline rule,
+  // Android WebView paints a focus ring around the whole 16:9 picture.
+  doc.write('<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}body{display:flex;align-items:center;justify-content:center}#arkstage-stage{position:relative;width:min(100vw,calc(100vh * 16 / 9));height:min(100vh,calc(100vw * 9 / 16));overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;outline:none;-webkit-tap-highlight-color:transparent}canvas{display:block}</style></head><body><div id="arkstage-stage"></div></body></html>');
   doc.close();
   // Some shared wiki modules read these optional MediaWiki settings at import.
   Object.assign(win, { mw: { config: { get: () => null, values: { wgUserGroups: [] } } } });
@@ -260,6 +263,7 @@ export async function bootModernEngineInFrame(opts: FrameBootOptions): Promise<F
   let bridge: EngineBridge;
   try { bridge = (await importModule(blob)).arkstageEngine; }
   finally { win.URL.revokeObjectURL(blob); }
+  if (opts.mode === "play") pushLog(bridge.musicContinuity ? "info" : "warn", `[audio] intro/loop preparation ${bridge.musicContinuity ? "enabled" : "unavailable in upstream API"}`);
   const nickname = localStorage.getItem("prts-nickname") || "博士";
   const script = opts.script.replaceAll("{@nickname}", nickname);
   const context = await bridge.loadContext(script);

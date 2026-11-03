@@ -51,3 +51,8 @@ docs/reference/
 Screenshot_*.jpg
 Screenshot_*.png
 /ref/
+
+# Private recovery archives; never publish repository/workspace backups.
+/.local-backups/
+/MuMu*.png
+**/.kotlin/

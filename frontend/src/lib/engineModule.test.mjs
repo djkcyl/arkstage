@@ -54,6 +54,17 @@ test("unsupported modules fail explicitly instead of presenting a frozen player"
   assert.throws(() => buildEngineModule("export const unknown=1;", ENTRY, new Map(), (url) => url), /模块接口不兼容/);
 });
 
+for (const declaration of ["class NativeAudio", "const NativeAudio = class"]) test(`installs music continuity on ${declaration}`, async () => {
+  const source = fixture("Music") + `${declaration} {
+    playMusic(){} stopMusic(){} createPlayback(){} getSound(){} destroy(){}
+  }; export {NativeAudio};`;
+  const output = buildEngineModule(source, ENTRY, new Map([[CONTEXT, contextSource]]), url => url === CONTEXT
+    ? `data:text/javascript;base64,${Buffer.from(contextSource).toString("base64")}` : url);
+  const module = await import(`data:text/javascript;base64,${Buffer.from(output).toString("base64")}`);
+  assert.equal(module.arkstageEngine.musicContinuity, true);
+  assert.match(module.NativeAudio.prototype.createPlayback.toString(), /identity.split/);
+});
+
 test("renderer uses WebGL with bounded resolution after viewport changes", async () => {
   const extra = `
     function displayResolution(host){return host.dpr;}
@@ -101,4 +112,5 @@ test("live upstream module can be adapted when fixtures are provided", { skip: !
   const output = buildEngineModule(source, ENTRY, new Map([[dependency, readFileSync(process.env.PRTS_CONTEXT_FIXTURE, "utf8")]]), (url) => url);
   assert.doesNotThrow(() => parse(output, {ecmaVersion:"latest",sourceType:"module"}));
   assert.ok(output.includes("export const arkstageEngine"));
+  assert.match(output, /musicContinuity:\s*true/);
 });

@@ -55,7 +55,7 @@ downloaded or already cached with zero failures.
 
 Screenshots are written to `/tmp/prts-e2e/` (`01_home` … `05_story_b_loaded`).
 
-## Requirements / caveats
+## Linux requirements / caveats
 
 - Tools: `Xvfb`, `xdotool`, ImageMagick (`import`, `convert`), `npm`, a built Rust toolchain (`cargo`).
 - `test-e2e.sh` clears `~/.local/share/cn.aunly.arkstage/{cache,media,assets}` for a deterministic run.

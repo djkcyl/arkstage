@@ -168,8 +168,8 @@ scripts/run-tests.sh     # 以上全部
 ## CI / Release
 
 - **CI**（`.github/workflows/ci.yml`）：每次 push / PR 运行静态检查；push 时额外为各平台构建安装包并作为 Workflow 产物上传（即「CI 版」）。
-- **Release**（`.github/workflows/release.yml`）：推送 `v*` 版本标签时，为 Android(arm64-v8a APK) / Windows / macOS(Intel + Apple Silicon) / Linux 构建并发布到对应 GitHub Release 的 Assets。标签含连字符（如 `v1.0.0-beta.1`）发布为 **pre-release**。
-- **书架资源**（`.github/workflows/update-storylines.yml`）：北京时间每天 22:00（UTC `0 14 * * *`）及手动触发。先用少量批量请求检查 wiki 修订号、活动数据、KV Git blob SHA 和图片 SHA；无变化时跳过 npm、图像工具、资源分支检出、图片下载和发布。有变化时按内容签名复用旧产物，只转换变动图片，发布到独立 `resources` 分支。调度由 GitHub Actions 执行，实际启动可能受平台队列影响。
+- **Release**（`.github/workflows/release.yml`）：推送 `v*` 版本标签时，为 Android(arm64-v8a APK) / Windows / macOS(Intel + Apple Silicon) / Linux 构建并上传到对应 GitHub Release 草稿的 Assets，核对构建结果、签名和发布说明后再正式发布。标签含连字符（如 `v1.0.0-beta.1`）发布为 **pre-release**。
+- **书架资源自动更新**（`.github/workflows/update-storylines.yml`）：北京时间每天 22:00（UTC `0 14 * * *`）及手动触发。先用少量批量请求检查 wiki 修订号、活动数据、KV Git blob SHA 和图片 SHA；无变化时跳过 npm、图像工具、资源分支检出、图片下载和发布。有变化时按内容签名复用旧产物，只转换变动图片，发布到独立 `resources` 分支。平台调度可能受队列影响。工作流仅在 resources 分支提交分类和图像更新，不直接向 master 提交。
 
 本地生成同一份资源负载：
 
@@ -185,7 +185,7 @@ node tools/build-resources/build-bookshelf-resources.mjs build/resources
 
 `LICENSE` 保留完整 AGPL-3.0-only 正文并附授权范围；`LICENSE-SCOPE.md` 明确排除 PRTS、鹰角及其他第三方代码/素材。关于页通过 raw import 内置这两个仓库文件，资源分支同样携带说明。变更法律声明时须同步 README 中的范围与责任说明。
 
-⚠️ **发版铁律**：发版前必须把 `package.json` 的 `version` 一并 bump 到 master 再打标签。应用内「检测更新」的首选源读取的就是 master 上 `package.json` 的 `version`（`cdn.jsdelivr.net/gh/<repo>@master/package.json`），漏 bump 会导致检测不到新版本。
+⚠️ **发版铁律**：发版前必须在 dev 或专用分支同步更新 `package.json`、锁文件和 Tauri/Cargo 版本，通过 PR 合入 master 后再打标签；禁止直接向 master 提交。应用内「检测更新」的首选源读取的就是 master 上 `package.json` 的 `version`（`cdn.jsdelivr.net/gh/<repo>@master/package.json`），漏 bump 会导致检测不到新版本。
 
 ```bash
 # 正式版
@@ -193,3 +193,5 @@ git tag v1.0.0 && git push origin v1.0.0
 # 预发布版
 git tag v1.0.0-beta.1 && git push origin v1.0.0-beta.1
 ```
+
+Git 操作限制见仓库根 AGENTS.md。用户未明确要求时，不运行任何 Git 命令，也不通过脚本、API 或云端自动化间接执行。
