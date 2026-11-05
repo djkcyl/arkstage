@@ -25,7 +25,7 @@
     "test:startup": "node --experimental-vm-modules --test frontend/src/lib/runtimeStartup.test.mjs",
     "test:resume": "tsc frontend/src/lib/playbackResume.ts --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,DOM --skipLibCheck --outDir build/test && node --test frontend/src/lib/playbackResume.test.mjs",
     "test:read-state": "tsc frontend/src/lib/readState.ts frontend/src/lib/playbackCompletion.ts --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,DOM --skipLibCheck --outDir build/test && node --test frontend/src/lib/readState.test.mjs",
-    "test:release": "node --test scripts/verify-release.test.mjs"
+    "test:release": "node --test scripts/verify-release.test.mjs scripts/release-workflow.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "~2.10.1",

@@ -172,7 +172,7 @@ scripts/run-tests.sh     # 以上全部
 ## CI / Release
 
 - **CI**（`.github/workflows/ci.yml`）：每次 push / PR 运行静态检查；push 时额外为各平台构建安装包并作为 Workflow 产物上传（即「CI 版」）。
-- **Release**（`.github/workflows/release.yml`）：推送 `v*` 标签后，先核对全部版本、发布说明、master 来源及静态检查，并验证与上次正式版签名的连续性；再并行构建 Android / Windows / macOS(Intel + Apple Silicon) / Linux，统一上传到一个草稿。全部任务成功、产物齐全且上传后的 APK 校验和通过，最后一个 job 才正式发布。标签含连字符时发布为 **pre-release**，已发布版本不可重建覆盖。
+- **Release**（`.github/workflows/release.yml`）：推送 `v*` 标签后，先核对全部版本、发布说明、master 来源及静态检查，并验证与上次正式版签名的连续性；再并行构建 Android / Windows / macOS(Intel + Apple Silicon) / Linux，统一上传到一个草稿。全部任务成功、产物齐全且上传后的 APK 校验和通过，最后一个 job 才正式发布。标签含连字符时发布为 **pre-release**，已发布版本不可重建覆盖。草稿查询使用发布列表和固定 Release ID，不使用只返回正式版的按标签接口。未发布版本若仅需修复工作流，可在修复经 PR 合入 master 后，选择 Actions → Release → Run workflow，填入原有标签重建；全流程检出并校验该标签的源码和 master 检查，不移动标签、不手工上传 APK。
 - Android Release 必须配置 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 和 `ANDROID_KEY_PASSWORD`。固定证书基准在 `config/android-signing.json`；工作流在编译前校验私钥证书，编译后校验 APK 签名、包名和版本，自动上传 APK、SHA-256 及公开签名清单。缺少密钥、证书变化或产物不全均失败，不手动补传本地 APK。
 - `node scripts/verify-release.mjs` 与 `npm run test:release` 验证发布门禁。初次建立签名须有明确授权，运行 `python3 scripts/setup-android-signing.py --generate` 后检查公开证书，再用 `--upload-github` 配置指定仓库 Secrets。该脚本只允许首次生成，不会替换已有身份；`.release-signing/` 是受限私密恢复目录，不提交、不清理，应另行妥善备份。
 - **书架资源自动更新**（`.github/workflows/update-storylines.yml`）：北京时间每天 22:00（UTC `0 14 * * *`）及手动触发。先用少量批量请求检查 wiki 修订号、活动数据、KV Git blob SHA 和图片 SHA；无变化时跳过 npm、图像工具、资源分支检出、图片下载和发布。有变化时按内容签名复用旧产物，只转换变动图片，发布到独立 `resources` 分支。平台调度可能受队列影响。工作流仅在 resources 分支提交分类和图像更新，不直接向 master 提交。
