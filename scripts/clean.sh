@@ -33,6 +33,11 @@ removed=0
 # Delete a path unless git tracks it (tracked files/dirs are never touched).
 rm_path() {
   local p="$1"
+  case "$p" in
+    .release-signing|.release-signing/*|./.release-signing|./.release-signing/*)
+      echo "  skip (private signing backup): $p"
+      return 0 ;;
+  esac
   [ -e "$p" ] || return 0
   if git ls-files --error-unmatch "$p" >/dev/null 2>&1; then
     echo "  skip (tracked): $p"
@@ -65,7 +70,7 @@ if [ "$DO_JUNK" = 1 ]; then
   # OS / editor cruft anywhere (skip heavy/ignored dirs).
   while IFS= read -r f; do
     rm_path "$f"
-  done < <(find . \( -path ./node_modules -o -path ./src-tauri/target -o -path ./.git -o -path ./build \) -prune -o \
+  done < <(find . \( -path ./node_modules -o -path ./src-tauri/target -o -path ./.git -o -path ./build -o -path ./.release-signing \) -prune -o \
     -type f \( -name '.DS_Store' -o -name 'Thumbs.db' -o -name '*.swp' -o -name '*~' \) -print)
 fi
 

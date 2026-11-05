@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "packageName": "cn.aunly.arkstage",
+  "keyAlias": "arkstage-release",
+  "certificateSha256": "35436f843546cb03344fde8c3fbea8dcb7deedcd9017dde3a5dbf0ab0a821eea",
+  "firstSignedVersion": "1.3.1",
+  "previousCertificateSha256": "c7abaa362386570e28c7df3791fa1e41052e26f515a6389c94536f0ad7dcede8",
+  "migrationReason": "The previous CI debug private key was not retained; a permanent release identity starts here."
+}

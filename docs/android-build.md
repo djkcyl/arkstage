@@ -116,15 +116,16 @@ unavailable, the app falls back to internal app-data so it still runs.
 
 ## Release signing
 
-Reuse the existing app's signing key for releases so users can upgrade without
-uninstalling. The key is never committed. For a local signed build, point Gradle
-at that existing key:
+Starting with v1.3.1, use the permanent identity in `config/android-signing.json`
+for every release. Its private key is stored in Actions Secrets with a restricted
+local recovery copy in `.release-signing/`; neither is committed. For a local
+signed diagnostic build, point Gradle at the established key:
 
 ```bash
 # Point the build at the existing keystore via env vars
-export ANDROID_KEYSTORE_PATH=/abs/path/to/prts-release.jks
+export ANDROID_KEYSTORE_PATH=/abs/path/to/arkstage-release.p12
 export ANDROID_KEYSTORE_PASSWORD=…
-export ANDROID_KEY_ALIAS=prts
+export ANDROID_KEY_ALIAS=arkstage-release
 export ANDROID_KEY_PASSWORD=…
 
 # Build a release APK
@@ -149,7 +150,10 @@ devices); 32-bit is dropped by design.
   installable for testing.
 - **`.github/workflows/release.yml`** — `android` job: on a `v*` tag, builds the
   arm64-v8a APK, verifies its certificate, package name and version, then attaches
-  `arkstage-<tag>-android-arm64-v8a.apk` and its `.sha256` file to the draft Release.
+  `arkstage-<tag>-android-arm64-v8a.apk`, its `.sha256` file, and
+  `arkstage-<tag>-android-signing.json` to the draft Release. A separate final job
+  requires every platform's assets, Actions provenance and matching server digest
+  before publishing the draft.
 
 Both set up JDK 21, the Android SDK + NDK 27.2.12479018 and the required Rust
 targets. CI builds both ABIs; Release uses
@@ -161,26 +165,30 @@ silently producing a new signing identity:
 
 | Secret | Value |
 | --- | --- |
-| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 prts-release.jks` |
+| `ANDROID_KEYSTORE_BASE64` | Base64 of the established PKCS12 keystore |
 | `ANDROID_KEYSTORE_PASSWORD` | keystore password |
-| `ANDROID_KEY_ALIAS` | key alias (e.g. `prts`) |
+| `ANDROID_KEY_ALIAS` | `arkstage-release` |
 | `ANDROID_KEY_PASSWORD` | key password |
 
 The release job decodes `ANDROID_KEYSTORE_BASE64` to a file and exports the
 `ANDROID_KEYSTORE_*` env vars that `build.gradle.kts` reads. Its public certificate
-fingerprint is pinned in `release.yml`; preserve the existing identity when
+fingerprint is pinned in `config/android-signing.json`; preserve this identity when
 updating the workflow. APK construction and upload are performed by Actions,
 not by manually uploading a local build.
 
-The compatibility baseline is the published v1.1.5 APK, whose certificate SHA-256
-is `c7abaa362386570e28c7df3791fa1e41052e26f515a6389c94536f0ad7dcede8`.
-Historical v1.1.4 used a different runner-generated debug certificate; the old
-optional-signing workflow did not ensure a stable signing identity. Use the
-original v1.1.5 keystore to preserve upgrades from that release. The different
-local test keystore cannot substitute for it, and an APK contains no recoverable
-signing private key.
+Historical v1.1.4 and v1.1.5 used different runner debug certificates and their
+private keys were not retained. The owner authorized a new permanent identity
+for v1.3.1. This is an explicit signing migration: old releases and test APKs
+require backing up needed data, uninstalling, and reinstalling once. Subsequent
+releases must match the v1.3.1 identity. The published signing manifest is checked
+automatically, so changing a key or a public fingerprint alone cannot silently
+break future upgrades.
 
-This phase intentionally ships only the local script + this doc.
+The setup helper runs only for an explicitly authorized initial provisioning;
+it is never part of CI. Existing-policy or partial-backup states prohibit new
+generation. Restore the existing backup rather than regenerating. Preserve the
+entire private recovery directory in a separate secure backup; do not put it in
+source control, a public artifact, or a Release. Cleanup scripts exclude it.
 
 ## Empirical verification results
 

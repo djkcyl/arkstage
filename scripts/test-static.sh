@@ -6,6 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "==> [1/6] engine compatibility tests"
+npm run test:release
 npm run test:engine
 npm run test:modules
 npm run test:diagnostics
