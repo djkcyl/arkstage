@@ -8,13 +8,22 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing reviewed version tag to rebuild (never move the tag)
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 permissions:
   contents: write
   checks: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -24,33 +33,44 @@ jobs:
     timeout-minutes: 20
     outputs:
       release_id: ${{ steps.draft.outputs.release_id }}
+      source_sha: ${{ steps.source.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - name: Validate tag, versions, notes and reviewed source
+        id: source
         run: |
-          node scripts/verify-release.mjs --tag "$GITHUB_REF_NAME"
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/master
+          node scripts/verify-release.mjs --tag "$RELEASE_TAG"
+          source_sha=$(git rev-parse HEAD)
+          git merge-base --is-ancestor "$source_sha" origin/master
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
       - name: Require successful master checks and prepare one draft
         id: draft
         uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         with:
           script: |
             const fs = require('fs');
             const { pathToFileURL } = require('url');
             const { validateSignerContinuity } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/verify-release.mjs`).href);
             const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
-            const tag = `v${version}`;
+            const tag = process.env.RELEASE_TAG;
+            const sourceSha = process.env.SOURCE_SHA;
             const signing = JSON.parse(fs.readFileSync('config/android-signing.json', 'utf8'));
             const notes = fs.readFileSync(`docs/releases/${tag}.md`, 'utf8');
-            let existing;
-            try { existing = (await github.rest.repos.getReleaseByTag({ ...context.repo, tag })).data; }
-            catch (error) { if (error.status !== 404) throw error; }
-            if (existing && (!existing.draft || (/^[a-f0-9]{40}$/.test(existing.target_commitish) && existing.target_commitish !== context.sha))) {
+            // getReleaseByTag only returns published releases. List releases to
+            // find drafts too, and reject ambiguity instead of creating duplicates.
+            const matches = (await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 }))
+              .filter(release => release.tag_name === tag);
+            if (matches.length > 1) throw new Error('Multiple releases use this tag; resolve the duplicate drafts first');
+            const existing = matches[0];
+            if (existing && (!existing.draft || (/^[a-f0-9]{40}$/.test(existing.target_commitish) && existing.target_commitish !== sourceSha))) {
               throw new Error('This tag is already published or its draft belongs to a different commit; do not overwrite it');
             }
             let previous;
@@ -68,7 +88,7 @@ jobs:
             const deadline = Date.now() + 15 * 60 * 1000;
             let checked = false;
             while (Date.now() < deadline) {
-              const checks = (await github.rest.checks.listForRef({ ...context.repo, ref: context.sha, per_page: 100 })).data.check_runs
+              const checks = (await github.rest.checks.listForRef({ ...context.repo, ref: sourceSha, per_page: 100 })).data.check_runs
                 .filter(check => check.name === 'Static checks' && check.app?.slug === 'github-actions');
               if (checks.length && checks.every(check => check.status === 'completed')) {
                 if (checks.some(check => check.conclusion !== 'success')) throw new Error('Master static checks failed; release blocked');
@@ -78,7 +98,7 @@ jobs:
               await new Promise(resolve => setTimeout(resolve, 20000));
             }
             if (!checked) throw new Error('Timed out waiting for master static checks');
-            const fields = { ...context.repo, tag_name: tag, target_commitish: context.sha,
+            const fields = { ...context.repo, tag_name: tag, target_commitish: sourceSha,
               name: `方舟剧场 ${tag}`, body: notes, draft: true, prerelease: version.includes('-') };
             const release = existing
               ? (await github.rest.repos.updateRelease({ ...fields, release_id: existing.id })).data
@@ -109,6 +129,8 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -151,7 +173,7 @@ jobs:
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           releaseDraft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
           args: ${{ matrix.args }}
 
   # Android isn't a tauri-action target, so build the per-ABI APKs separately and
@@ -167,6 +189,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: actions/setup-node@v4
         with:
@@ -243,32 +267,46 @@ jobs:
           mkdir -p dist-apk
           arm=$(find "$out" -path '*arm64*' -name '*release*.apk' | head -1)
           test -n "$arm" || { echo "::error::arm64-v8a APK not found under $out"; find "$out" -name '*.apk'; exit 1; }
-          cp "$arm" "dist-apk/arkstage-${{ github.ref_name }}-android-arm64-v8a.apk"
+          cp "$arm" "dist-apk/arkstage-$RELEASE_TAG-android-arm64-v8a.apk"
           ls -lh dist-apk
 
       - name: Verify APK signature and version
         run: |
-          apk="dist-apk/arkstage-${{ github.ref_name }}-android-arm64-v8a.apk"
+          apk="dist-apk/arkstage-$RELEASE_TAG-android-arm64-v8a.apk"
           tools="$ANDROID_HOME/build-tools/35.0.0"
           expected=$(node -p "require('./config/android-signing.json').certificateSha256")
           "$tools/apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apk-signature.txt"
           actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apk-signature.txt")
           test "$actual" = "$expected" || { echo "::error::APK signing certificate differs from the permanent release identity"; exit 1; }
           "$tools/aapt" dump badging "$apk" | tee "$RUNNER_TEMP/apk-badging.txt"
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           grep -F "versionName='$version'" "$RUNNER_TEMP/apk-badging.txt"
           grep -F "package: name='cn.aunly.arkstage'" "$RUNNER_TEMP/apk-badging.txt"
           (cd dist-apk && sha256sum "$(basename "$apk")" > "$(basename "$apk").sha256")
-          node -e "const fs=require('fs');fs.writeFileSync('dist-apk/arkstage-${{ github.ref_name }}-android-signing.json',JSON.stringify({...require('./config/android-signing.json'),version:require('./package.json').version},null,2)+'\n')"
+          node -e "const fs=require('fs');fs.writeFileSync('dist-apk/arkstage-'+process.env.RELEASE_TAG+'-android-signing.json',JSON.stringify({...require('./config/android-signing.json'),version:require('./package.json').version},null,2)+'\n')"
 
       - name: Attach APKs to the release
-        uses: softprops/action-gh-release@v2
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
         with:
-          tag_name: ${{ github.ref_name }}
-          draft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          fail_on_unmatched_files: true
-          files: dist-apk/*
+          script: |
+            const fs = require('fs');
+            const releaseId = Number(process.env.RELEASE_ID);
+            const release = (await github.rest.repos.getRelease({ ...context.repo, release_id: releaseId })).data;
+            if (!release.draft || release.tag_name !== process.env.RELEASE_TAG) throw Error('Release draft identity differs');
+            const existing = await github.paginate(github.rest.repos.listReleaseAssets, { ...context.repo, release_id: releaseId, per_page: 100 });
+            const names = ['android-arm64-v8a.apk', 'android-arm64-v8a.apk.sha256', 'android-signing.json']
+              .map(suffix => `arkstage-${process.env.RELEASE_TAG}-${suffix}`);
+            for (const name of names) {
+              const data = fs.readFileSync(`dist-apk/${name}`);
+              if (!data.length) throw Error(`Empty Android asset: ${name}`);
+              for (const asset of existing.filter(asset => asset.name === name)) {
+                await github.rest.repos.deleteReleaseAsset({ ...context.repo, asset_id: asset.id });
+              }
+              await github.rest.repos.uploadReleaseAsset({ ...context.repo, release_id: releaseId, name, data,
+                headers: { 'content-type': name.endsWith('.apk') ? 'application/vnd.android.package-archive' : 'application/octet-stream', 'content-length': data.length } });
+            }
 
   publish:
     name: Verify all assets and publish
@@ -277,6 +315,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -284,22 +324,32 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
         run: |
-          gh api "repos/$GH_REPO/releases/tags/$GITHUB_REF_NAME" > release-assets.json
-          node scripts/verify-release.mjs --tag "$GITHUB_REF_NAME" --assets-json release-assets.json
+          gh api "repos/$GH_REPO/releases/$RELEASE_ID" > release-assets.json
+          node scripts/verify-release.mjs --tag "$RELEASE_TAG" --assets-json release-assets.json
           dir="$RUNNER_TEMP/release-verify"
           mkdir -p "$dir"
-          gh release download "$GITHUB_REF_NAME" --dir "$dir" \
-            --pattern "arkstage-$GITHUB_REF_NAME-android-arm64-v8a.apk" \
-            --pattern "arkstage-$GITHUB_REF_NAME-android-arm64-v8a.apk.sha256" \
-            --pattern "arkstage-$GITHUB_REF_NAME-android-signing.json"
-          (cd "$dir" && sha256sum -c "arkstage-$GITHUB_REF_NAME-android-arm64-v8a.apk.sha256")
+          node --input-type=module <<'JS' > "$dir/downloads.tsv"
+          import fs from 'node:fs';
+          const tag = process.env.RELEASE_TAG;
+          const release = JSON.parse(fs.readFileSync('release-assets.json', 'utf8'));
+          if (release.tag_name !== tag || !release.draft) throw Error('Release draft identity differs');
+          for (const suffix of ['android-arm64-v8a.apk', 'android-arm64-v8a.apk.sha256', 'android-signing.json']) {
+            const asset = release.assets.find(asset => asset.name === `arkstage-${tag}-${suffix}`);
+            console.log(`${asset.id}\t${asset.name}`);
+          }
+          JS
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api "repos/$GH_REPO/releases/assets/$asset_id" -H 'Accept: application/octet-stream' > "$dir/$asset_name"
+          done < "$dir/downloads.tsv"
+          (cd "$dir" && sha256sum -c "arkstage-$RELEASE_TAG-android-arm64-v8a.apk.sha256")
           node --input-type=module <<'JS'
           import fs from 'node:fs';
           import crypto from 'node:crypto';
           import { readRelease, validateSignerContinuity } from './scripts/verify-release.mjs';
           const current = readRelease(process.cwd());
-          const tag = process.env.GITHUB_REF_NAME;
+          const tag = process.env.RELEASE_TAG;
           const dir = `${process.env.RUNNER_TEMP}/release-verify`;
           const published = JSON.parse(fs.readFileSync(`${dir}/arkstage-${tag}-android-signing.json`, 'utf8'));
           validateSignerContinuity(current.signing, published, current.versions.package);
@@ -312,14 +362,17 @@ jobs:
           JS
       - name: Publish the verified draft
         uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
         with:
           script: |
             const fs = require('fs');
-            const tag = context.ref.replace('refs/tags/', '');
-            const release = (await github.rest.repos.getReleaseByTag({ ...context.repo, tag })).data;
+            const tag = process.env.RELEASE_TAG;
+            const release = (await github.rest.repos.getRelease({ ...context.repo, release_id: Number(process.env.RELEASE_ID) })).data;
             let object = (await github.rest.git.getRef({ ...context.repo, ref: `tags/${tag}` })).data.object;
             while (object.type === 'tag') object = (await github.rest.git.getTag({ ...context.repo, tag_sha: object.sha })).data.object;
-            if (!release.draft || release.id !== Number('${{ needs.prepare.outputs.release_id }}') || object.sha !== context.sha) {
+            if (!release.draft || release.tag_name !== tag || object.sha !== process.env.SOURCE_SHA) {
               throw new Error('Draft or tag identity changed; publication blocked');
             }
             const published = (await github.rest.repos.updateRelease({ ...context.repo, release_id: release.id,
