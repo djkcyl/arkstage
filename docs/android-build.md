@@ -172,6 +172,14 @@ fingerprint is pinned in `release.yml`; preserve the existing identity when
 updating the workflow. APK construction and upload are performed by Actions,
 not by manually uploading a local build.
 
+The compatibility baseline is the published v1.1.5 APK, whose certificate SHA-256
+is `c7abaa362386570e28c7df3791fa1e41052e26f515a6389c94536f0ad7dcede8`.
+Historical v1.1.4 used a different runner-generated debug certificate; the old
+optional-signing workflow did not ensure a stable signing identity. Use the
+original v1.1.5 keystore to preserve upgrades from that release. The different
+local test keystore cannot substitute for it, and an APK contains no recoverable
+signing private key.
+
 This phase intentionally ships only the local script + this doc.
 
 ## Empirical verification results

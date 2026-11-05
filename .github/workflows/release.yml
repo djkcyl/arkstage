@@ -163,8 +163,9 @@ jobs:
 
       - name: Verify APK signature and version
         env:
-          # Public fingerprint of the key used by the existing installable APKs.
-          EXPECTED_CERT_SHA256: 5049b13a0c021e27282d9b3ef658eabff048401e5719d23c9e9c59284539a57c
+          # Public fingerprint verified from the published v1.1.5 APK.
+          # The local test key is different and cannot preserve release upgrades.
+          EXPECTED_CERT_SHA256: c7abaa362386570e28c7df3791fa1e41052e26f515a6389c94536f0ad7dcede8
         run: |
           apk="dist-apk/arkstage-${{ github.ref_name }}-android-arm64-v8a.apk"
           tools="$ANDROID_HOME/build-tools/35.0.0"
