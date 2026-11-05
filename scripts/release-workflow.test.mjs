@@ -58,7 +58,9 @@ test('prepare reuses the exact draft and checks the tag source when manually dis
     await stepScript('Require successful master checks and prepare one draft')(require, github, { repo: { owner: 'test', repo: 'test' }, sha: 'b'.repeat(40) }, core);
     assert.equal(updates.length, 1);
     assert.equal(updates[0].release_id, draft.id);
-    assert.equal(updates[0].target_commitish, sourceSha);
+    // This fallback is ignored for the existing tag and must not resend its
+    // older workflow commit into GitHub's workflows-write permission guard.
+    assert.equal(updates[0].target_commitish, 'master');
     assert.equal(outputs.release_id, draft.id);
   });
 });
