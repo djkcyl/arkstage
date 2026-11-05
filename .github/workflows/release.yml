@@ -47,6 +47,7 @@ jobs:
         run: |
           node scripts/verify-release.mjs --tag "$RELEASE_TAG"
           source_sha=$(git rev-parse HEAD)
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$source_sha"
           git merge-base --is-ancestor "$source_sha" origin/master
           echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
       - name: Require successful master checks and prepare one draft
@@ -98,7 +99,11 @@ jobs:
               await new Promise(resolve => setTimeout(resolve, 20000));
             }
             if (!checked) throw new Error('Timed out waiting for master static checks');
-            const fields = { ...context.repo, tag_name: tag, target_commitish: sourceSha,
+            // The tag already exists and its actual SHA is checked independently.
+            // An old target_commitish SHA can trigger GitHub's workflows-write
+            // guard even when unchanged. Keep the inert fallback on master;
+            // never ask the release API to create or move the reviewed tag.
+            const fields = { ...context.repo, tag_name: tag, target_commitish: 'master',
               name: `方舟剧场 ${tag}`, body: notes, draft: true, prerelease: version.includes('-') };
             const release = existing
               ? (await github.rest.repos.updateRelease({ ...fields, release_id: existing.id })).data
