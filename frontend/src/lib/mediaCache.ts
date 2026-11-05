@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { PROXY_BASE } from "./proxy";
 
 const pending = new Map<string, Promise<void>>();
+export function resetPlaybackAssetRequests(): void { pending.clear(); }
 export function originalAssetUrl(url: string): string | null {
   const original = url.startsWith(`${PROXY_BASE}/`) ? `https://${url.slice(PROXY_BASE.length + 1)}` : url;
   return /^https:\/\/(static|torappu|media)\.prts\.wiki\//.test(original) ? original : null;

@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PlayerController } from "../lib/modernEngine";
 import { pushLog } from "../lib/debugLog";
-import { buildTranscript } from "../lib/playerTranscript";
 import { useLogFontSize } from "../lib/uiSettings";
 import nativeLayout from "../assets/player-ui/layout.json";
 import settingsIcon from "../assets/player-ui/settings.png";
@@ -39,18 +38,15 @@ function graphic(key: Control, width: number, height: number, dx = 0, dy = 0) {
     top: center.y - hit.top - height / 2 + dy, width, height };
 }
 
-export default function PlayerHUD({ controller, script, onExit, onError }: {
-  controller: PlayerController; script: string; onExit: () => void; onError: (error: string) => void;
+export default function PlayerHUD({ controller, onExit, onError, onReload }: {
+  controller: PlayerController; onExit: () => void; onError: (error: string) => void; onReload?: () => void;
 }) {
   const surface = useRef<HTMLDivElement>(null);
-  const logScroll = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [state, setState] = useState(() => controller.state());
   const [panel, setPanel] = useState<Panel>(null);
   const [hidden, setHidden] = useState(false);
-  const [allText, setAllText] = useState(false);
   const logFontSize = useLogFontSize();
-  const entries = useMemo(() => panel === "log" ? buildTranscript(script, allText ? undefined : state.line) : [], [script, allText, state.line, panel]);
   const [volume, setVolume] = useState(() => Number(localStorage.getItem("prts-player-volume") ?? 1));
 
   useEffect(() => {
@@ -68,21 +64,25 @@ export default function PlayerHUD({ controller, script, onExit, onError }: {
     const timer = setInterval(() => setState(controller.state()), 120);
     return () => clearInterval(timer);
   }, [controller]);
-  useEffect(() => {
-    if (panel === "log" && logScroll.current) {
-      logScroll.current.scrollTop = allText ? 0 : logScroll.current.scrollHeight;
-    }
-  }, [panel, allText]);
+  useEffect(() => () => controller.closeLog(), [controller]);
 
   const run = (action: () => Promise<void>) => { void action().catch((error) => { pushLog("error", "[playback] control failed:", error); onError(String(error)); }); };
-  const open = (value: Panel) => { controller.setAuto(false); setState(controller.state()); setPanel(value); };
+  const open = (value: Panel) => {
+    if (controller.state().state === "resuming") return;
+    controller.setAuto(false); setState(controller.state());
+    if (value === "log") {
+      try { controller.openLog(logFontSize, () => setPanel(null)); }
+      catch (error) { pushLog("error", "[playback] LOG failed:", error); onError(String(error)); return; }
+    }
+    setPanel(value);
+  };
   const reveal = () => { controller.setUIVisible(true); setHidden(false); };
 
-  return <div className="reader-hud-surface" ref={surface}>
+  return <div className="reader-hud-surface" ref={surface} style={panel === "log" ? { visibility: "hidden" } : undefined}>
     {hidden ? <button className="reader-reveal" aria-label="恢复剧情界面" onClick={reveal} /> : <>
       <nav className="reader-hud" aria-label="剧情播放控制" style={{ transform: `translate(-50%, -50%) scale(${scale})` }}>
         <button className="reader-icon reader-settings" style={hitbox("btn_setting")} aria-label="剧情设置" title="设置" onClick={() => open("settings")}><img src={settingsIcon} style={graphic("btn_setting", 40, 40, 0, 3)} alt="" /></button>
-        <button className="reader-icon reader-log" style={hitbox("btn_log")} aria-label="剧情日志" title="LOG" onClick={() => { setAllText(false); open("log"); }}><img src={logIcon} style={graphic("btn_log", 44, 44)} alt="" /></button>
+        <button className="reader-icon reader-log" style={hitbox("btn_log")} aria-label="剧情日志" title="LOG" onClick={() => open("log")}><img src={logIcon} style={graphic("btn_log", 44, 44)} alt="" /></button>
         <button className="reader-icon reader-hide" style={hitbox("btn_hide")} aria-label="隐藏剧情界面" title="隐藏界面" onClick={() => { controller.setUIVisible(false); setHidden(true); }}><img src={hideIcon} style={graphic("btn_hide", 44, 44)} alt="" /></button>
         {state.auto && <button className="reader-speed" style={hitbox("btn_speed")} aria-label="切换播放速度" title={`自动播放速度 ${state.speed} 倍`} onClick={() => controller.setSpeed(controller.state().speed % 3)}>
           <img src={speedFrame} style={graphic("btn_speed", 84, 28, 1, 0)} alt="" />
@@ -100,24 +100,14 @@ export default function PlayerHUD({ controller, script, onExit, onError }: {
       {state.state === "finished" && <button className="reader-finished" onClick={onExit}>剧情结束 · 返回书架</button>}
     </>}
 
-    {panel && <div className="reader-dialog-backdrop" onClick={() => setPanel(null)}>
-      <section className={`reader-dialog${panel === "log" ? " reader-transcript" : ""}`} role="dialog" aria-modal="true" aria-label={panel === "settings" ? "剧情设置" : "剧情日志"} onClick={(event) => event.stopPropagation()}>
-        <header><span>{panel === "settings" ? "设置" : "LOG"}</span><button aria-label="关闭面板" onClick={() => setPanel(null)}>×</button></header>
-        {panel === "settings" && <>
-          <label className="reader-volume">音量 <input aria-label="音量" type="range" min="0" max="1" step="0.05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>
-          <div className="reader-menu-actions">
-            <button onClick={() => { setPanel(null); run(() => controller.reset()); }}>重新播放</button>
-          </div>
-        </>}
-        {panel === "log" && <>
-          <button className="reader-text-toggle" aria-pressed={allText} onClick={() => setAllText(!allText)}>{allText ? "查看已读记录" : "查看全部文本"}</button>
-          <div className="reader-log-scroll" ref={logScroll} style={{ fontSize: `${logFontSize}px` }} tabIndex={0} aria-label={allText ? "全部剧情文本" : "已读剧情记录"}>
-            {entries.length ? <ol className="reader-log-entries">{entries.map((entry) => <li className="reader-log-entry" key={entry.line}>
-              {entry.speaker && <div className="reader-log-speaker">{entry.speaker}</div>}
-              <p className="reader-log-text">{entry.text}</p>
-            </li>)}</ol> : <p>剧情尚未开始</p>}
-          </div>
-        </>}
+    {panel === "settings" && <div className="reader-dialog-backdrop" onClick={() => setPanel(null)}>
+      <section className="reader-dialog" role="dialog" aria-modal="true" aria-label="剧情设置" onClick={(event) => event.stopPropagation()}>
+        <header><span>设置</span><button aria-label="关闭面板" onClick={() => setPanel(null)}>×</button></header>
+        <label className="reader-volume">音量 <input aria-label="音量" type="range" min="0" max="1" step="0.05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>
+        <div className="reader-menu-actions">
+          <button onClick={() => { setPanel(null); run(() => controller.reset()); }}>重新播放</button>
+          {onReload && <button onClick={() => { setPanel(null); onReload(); }}>重载播放引擎</button>}
+        </div>
       </section>
     </div>}
   </div>;

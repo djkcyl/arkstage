@@ -5,7 +5,7 @@ import { useStoryIndex } from "../hooks/useStoryIndex";
 import { useDownload } from "../lib/DownloadContext";
 import { useCompression } from "../lib/CompressionContext";
 import { buildShelves } from "../lib/bookshelf";
-import { getReadStories, getLastWatched } from "../lib/readState";
+import { getReadStories, getLastWatched, subscribeReadState } from "../lib/readState";
 import type { Book, Shelf } from "../lib/bookshelf";
 import CoverCard from "../components/CoverCard";
 import ChapterDetail from "../components/ChapterDetail";
@@ -75,7 +75,8 @@ export default function StoryBrowserPage() {
       setLastWatchedState(getLastWatched());
     };
     window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
+    const unsubscribe = subscribeReadState(refresh);
+    return () => { window.removeEventListener("focus", refresh); unsubscribe(); };
   }, []);
 
   const refreshCached = useCallback(

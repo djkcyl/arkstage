@@ -9,8 +9,11 @@ test("logs and last playback checkpoint survive a renderer reload", async () => 
   await first.playbackCheckpoint("SR-ST-1 月落/NBT", "renderer-mount");
   const reopened = await import("../../../build/test/debugLog.js?after-process-death");
   assert.ok(reopened.getEntries().some(e=>e.msg.includes("iframe stack")));
-  assert.equal(reopened.getInterruptedPlayback().stage,"renderer-mount");
-  assert.equal(reopened.getInterruptedPlayback().title,"SR-ST-1 月落/NBT");
+  assert.equal(reopened.getInterruptedPlayback(),null);
+  assert.ok(stored.has("prts-playback-checkpoint-v1"));
+  await reopened.playbackCheckpoint("SR-ST-1 月落/NBT", "context-lost");
+  const failed = await import("../../../build/test/debugLog.js?after-confirmed-error");
+  assert.equal(failed.getInterruptedPlayback().stage,"context-lost");
   await reopened.playbackCheckpoint("SR-ST-1 月落/NBT", "disposed");
   const clean = await import("../../../build/test/debugLog.js?after-clean-exit");
   assert.equal(clean.getInterruptedPlayback(),null);

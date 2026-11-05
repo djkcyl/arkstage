@@ -330,6 +330,7 @@ pub fn run() {
             wiki::fetch_widget_bundle,
             wiki::fetch_story_runtime,
             wiki::fetch_page_revisions,
+            wiki::fetch_engine_version,
             // Cache management
             cache::save_to_cache,
             cache::load_from_cache,

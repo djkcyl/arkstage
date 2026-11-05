@@ -11,7 +11,10 @@ npm run test:modules
 npm run test:diagnostics
 npm run test:playback
 npm run test:transcript
+npm run test:resume
+npm run test:read-state
 npm run test:cache
+npm run test:startup
 npm run test:music
 npm run test:resources
 

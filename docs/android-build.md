@@ -114,23 +114,20 @@ uninstall. There is **no** in-app directory picker on Android (the Settings
 JNI call to `Context.getExternalFilesDir(null)`; if external storage is somehow
 unavailable, the app falls back to internal app-data so it still runs.
 
-## Release signing (when ready)
+## Release signing
 
-The release path is wired but disabled — no keystore is generated or committed.
-To cut a signed release:
+Reuse the existing app's signing key for releases so users can upgrade without
+uninstalling. The key is never committed. For a local signed build, point Gradle
+at that existing key:
 
 ```bash
-# 1. Generate a keystore (once)
-keytool -genkey -v -keystore prts-release.jks -keyalg RSA -keysize 2048 \
-  -validity 10000 -alias prts
-
-# 2. Point the build at it via env vars
+# Point the build at the existing keystore via env vars
 export ANDROID_KEYSTORE_PATH=/abs/path/to/prts-release.jks
 export ANDROID_KEYSTORE_PASSWORD=…
 export ANDROID_KEY_ALIAS=prts
 export ANDROID_KEY_PASSWORD=…
 
-# 3. Build a release APK
+# Build a release APK
 RELEASE=1 scripts/build-android.sh
 ```
 
@@ -151,16 +148,16 @@ devices); 32-bit is dropped by design.
   artifact (`arkstage-android-<sha>`). Debug-signed (no keystore in CI), but
   installable for testing.
 - **`.github/workflows/release.yml`** — `android` job: on a `v*` tag, builds the
-  two APKs and attaches them to the GitHub Release as
-  `arkstage-<tag>-android-arm64-v8a.apk` / `…-x86_64.apk`.
+  arm64-v8a APK, verifies its certificate, package name and version, then attaches
+  `arkstage-<tag>-android-arm64-v8a.apk` and its `.sha256` file to the draft Release.
 
-Both run `npm run tauri android build -- --apk --target aarch64 --target x86_64
---split-per-abi` after setting up JDK 21, the Android SDK + NDK 27.2.12479018
-(`android-actions/setup-android` + `sdkmanager`), and the two Rust Android
-targets.
+Both set up JDK 21, the Android SDK + NDK 27.2.12479018 and the required Rust
+targets. CI builds both ABIs; Release uses
+`npm run tauri android build -- --apk --target aarch64 --split-per-abi`.
 
-**Release signing in CI** is optional. Set these repository secrets to sign with
-your real keystore (otherwise the build falls back to debug signing):
+**Release signing in Actions** requires these repository secrets. Missing keys,
+an unexpected certificate or a missing APK fail the release job rather than
+silently producing a new signing identity:
 
 | Secret | Value |
 | --- | --- |
@@ -170,7 +167,10 @@ your real keystore (otherwise the build falls back to debug signing):
 | `ANDROID_KEY_PASSWORD` | key password |
 
 The release job decodes `ANDROID_KEYSTORE_BASE64` to a file and exports the
-`ANDROID_KEYSTORE_*` env vars that `build.gradle.kts` reads.
+`ANDROID_KEYSTORE_*` env vars that `build.gradle.kts` reads. Its public certificate
+fingerprint is pinned in `release.yml`; preserve the existing identity when
+updating the workflow. APK construction and upload are performed by Actions,
+not by manually uploading a local build.
 
 This phase intentionally ships only the local script + this doc.
 

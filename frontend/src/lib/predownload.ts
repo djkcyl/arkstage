@@ -61,6 +61,25 @@ export function isOfflineError(e: unknown): boolean {
 // falls back to the last successful bundle so already-cached stories remain usable.
 let bundlePromise: Promise<WidgetBundle> | null = null;
 const storyRuntimePromises = new Map<string, Promise<StoryRuntime>>();
+let engineVersionPromise: Promise<NonNullable<WidgetBundle["module_engine"]>> | null = null;
+function engineVersion() {
+  return engineVersionPromise ??= invoke<NonNullable<WidgetBundle["module_engine"]>>("fetch_engine_version");
+}
+function sameEngine(a: WidgetBundle["module_engine"], b: WidgetBundle["module_engine"]) {
+  return !!a && !!b && a.entry_url === b.entry_url
+    && JSON.stringify(a.stylesheet_urls) === JSON.stringify(b.stylesheet_urls)
+    && JSON.stringify(a.polyfill_urls) === JSON.stringify(b.polyfill_urls);
+}
+
+/** Explicit recovery bypasses the session result and the lightweight check. */
+export function reloadStoryRuntime(title: string): Promise<StoryRuntime> {
+  bundlePromise = null;
+  engineVersionPromise = null;
+  const pending = refreshStoryRuntime(title, true);
+  storyRuntimePromises.set(title, pending);
+  void pending.catch(() => { if (storyRuntimePromises.get(title) === pending) storyRuntimePromises.delete(title); });
+  return pending;
+}
 
 /** Allow a later navigation/retry to re-fetch after a transient rejected request. */
 function retainOnlySuccess<T>(promise: Promise<T>, clear: () => void): Promise<T> {
@@ -73,10 +92,11 @@ interface RawStoryRuntime {
   bundle: WidgetBundle;
   revision: string;
   validationVersion?: string;
+  page_revision?: string | null;
 }
 
 export interface StoryRuntime extends RawStoryRuntime {
-  source: "live" | "cache" | "legacy-cache";
+  source: "live" | "verified-cache" | "cache" | "legacy-cache";
   warning?: string;
   /** Previous verified generation, used if visible-mode boot rejects the candidate. */
   fallback?: RawStoryRuntime;
@@ -111,31 +131,47 @@ async function refreshBundle(): Promise<WidgetBundle> {
   } catch {
     // Continue with the live request.
   }
-  try {
-    const fresh = await invoke<WidgetBundle>("fetch_widget_bundle", { pageTitle: "W2G/BEG" });
-    if (cached && isSuspiciousRegression(fresh, cached)) {
-      throw new Error("PRTS 全局资源表数量异常回退，已拒绝覆盖本地可用版本");
+  const refresh = async (): Promise<WidgetBundle> => {
+    try {
+      if (cached?.validation_version === ENGINE_ADAPTER_VERSION && cached.module_engine
+        && sameEngine(cached.module_engine, await engineVersion())) {
+        pushLog("info", "[runtime-update] shared hashed engine version unchanged");
+        return cached;
+      }
+      const fresh = await invoke<WidgetBundle>("fetch_widget_bundle", { pageTitle: "W2G/BEG" });
+      if (cached && isSuspiciousRegression(fresh, cached)) {
+        throw new Error("PRTS 全局资源表数量异常回退，已拒绝覆盖本地可用版本");
+      }
+      if (cached?.revision && cached.revision === fresh.revision && cached.validation_version === ENGINE_ADAPTER_VERSION) {
+        pushLog("info", "[runtime-update] shared engine unchanged; reuse verified snapshot");
+        return cached;
+      }
+      await validateBundleBoot(fresh, "W2G/BEG");
+      fresh.validation_version = ENGINE_ADAPTER_VERSION;
+      await invoke("save_to_cache", {
+        key: "widget-bundle-v6",
+        data: JSON.stringify(fresh),
+      }).catch(() => {});
+      if (!fresh.module_engine) await refreshEngineDeps();
+      return fresh;
+    } catch (error) {
+      if (cached) {
+        pushLog("warn", "[runtime-update] PRTS 候选引擎验证失败，保留上次可用版本:", error);
+        if (!cached.module_engine) await refreshEngineDeps();
+        return cached;
+      }
+      throw error;
     }
-    if (cached?.revision && cached.revision === fresh.revision && cached.validation_version === ENGINE_ADAPTER_VERSION) {
-      pushLog("info", "[runtime-update] shared engine unchanged; reuse verified snapshot");
-      return cached;
-    }
-    await validateBundleBoot(fresh, "W2G/BEG");
-    fresh.validation_version = ENGINE_ADAPTER_VERSION;
-    await invoke("save_to_cache", {
-      key: "widget-bundle-v6",
-      data: JSON.stringify(fresh),
-    }).catch(() => {});
-    if (!fresh.module_engine) await refreshEngineDeps();
-    return fresh;
-  } catch (error) {
-    if (cached) {
-      pushLog("warn", "[runtime-update] PRTS 候选引擎验证失败，保留上次可用版本:", error);
-      if (!cached.module_engine) await refreshEngineDeps();
-      return cached;
-    }
-    throw error;
+  };
+  if (cached?.validation_version === ENGINE_ADAPTER_VERSION) {
+    const current = bundlePromise;
+    void refresh().then(bundle => {
+      if (bundlePromise === current) bundlePromise = Promise.resolve(bundle);
+    }).catch(error => pushLog("warn", "[runtime-update] background shared check failed:", error));
+    pushLog("info", "[runtime-cache] shared engine: verified local snapshot; check in background");
+    return cached;
   }
+  return refresh();
 }
 
 function isSuspiciousRegression(fresh: WidgetBundle, cached: WidgetBundle): boolean {
@@ -151,7 +187,7 @@ function isSuspiciousRegression(fresh: WidgetBundle, cached: WidgetBundle): bool
     || (a.engine_script_bytes ?? 0) < (b.engine_script_bytes ?? 0) * 0.7;
 }
 
-/** Exact-page, fresh-first script + engine/data snapshot for interactive playback. */
+/** Exact-page snapshot: verified local playback with a shared background update check. */
 export function loadStoryRuntime(title: string): Promise<StoryRuntime> {
   let promise = storyRuntimePromises.get(title);
   if (!promise) {
@@ -164,7 +200,8 @@ export function loadStoryRuntime(title: string): Promise<StoryRuntime> {
   return promise;
 }
 
-async function refreshStoryRuntime(title: string): Promise<StoryRuntime> {
+async function refreshStoryRuntime(title: string, force = false): Promise<StoryRuntime> {
+  const cacheStart = performance.now();
   const key = `story-runtime-v6_${title.replace(/\//g, "_")}`;
   const previousKey = `${key}-previous`;
   let cached: RawStoryRuntime | null = null;
@@ -181,49 +218,80 @@ async function refreshStoryRuntime(title: string): Promise<StoryRuntime> {
   } catch {
     // Continue with live fetch.
   }
-  try {
-    reportLoading({ phase: "check", message: "正在检查剧情与演出引擎更新…" });
-    const fresh = await invoke<RawStoryRuntime>("fetch_story_runtime", { pageTitle: title });
-    if (cached && isSuspiciousRegression(fresh.bundle, cached.bundle)) {
-      throw new Error("PRTS 当前同页快照完整性低于本地版本，已阻止覆盖");
+  const verified = cached?.validationVersion === ENGINE_ADAPTER_VERSION;
+  const refresh = async (): Promise<StoryRuntime> => {
+    try {
+      if (!verified) reportLoading({ phase: "check", message: "正在检查剧情与演出引擎更新…" });
+      if (!force && verified && cached?.page_revision && cached.bundle.module_engine) {
+        const [revisions, engine] = await Promise.all([
+          invoke<Record<string, string>>("fetch_page_revisions", { titles: [title] }), engineVersion(),
+        ]);
+        const pageRevision = revisions[title] ?? Object.entries(revisions)
+          .find(([key]) => key.replaceAll("_", " ") === title.replaceAll("_", " "))?.[1];
+        if (!pageRevision) throw new Error("PRTS 未返回剧情版本，继续使用本地快照");
+        if (pageRevision === cached.page_revision && sameEngine(cached.bundle.module_engine, engine)) {
+          pushLog("info", `[runtime-update] ${title}: page revision and hashed engine unchanged`);
+          return { ...cached, source: "verified-cache" };
+        }
+      }
+      const fresh = await invoke<RawStoryRuntime>("fetch_story_runtime", { pageTitle: title });
+      if (cached && isSuspiciousRegression(fresh.bundle, cached.bundle)) {
+        throw new Error("PRTS 当前同页快照完整性低于本地版本，已阻止覆盖");
+      }
+      if (!force && cached && cached.revision === fresh.revision && cached.validationVersion === ENGINE_ADAPTER_VERSION) {
+        if (fresh.page_revision && fresh.page_revision !== cached.page_revision) {
+          cached.page_revision = fresh.page_revision;
+          await invoke("save_to_cache", { key, data: JSON.stringify(cached) }).catch(() => {});
+        }
+        pushLog("info", `[runtime-update] ${title}: unchanged; reuse verified snapshot`);
+        return { ...cached, source: "verified-cache" };
+      }
+      // This is the promotion gate: execute the candidate in a disposable iframe
+      // before it is allowed to replace last-known-good on disk.
+      await validateRuntimeBoot(fresh, title, verified);
+      fresh.validationVersion = ENGINE_ADAPTER_VERSION;
+      if (cached && cached.revision !== fresh.revision) {
+        await invoke("save_to_cache", { key: previousKey, data: JSON.stringify(cached) }).catch(() => {});
+      }
+      await invoke("save_to_cache", { key, data: JSON.stringify(fresh) }).catch(() => {});
+      if (!fresh.bundle.module_engine) await refreshEngineDeps();
+      return { ...fresh, source: "live", fallback: cached ?? undefined };
+    } catch (error) {
+      if (cached) {
+        pushLog("warn", `[runtime-update] ${title}: 候选快照验证失败，自动回退`, error);
+        if (!cached.bundle.module_engine) await refreshEngineDeps();
+        return { ...cached, source: "cache", warning: String(error) };
+      }
+      // Upgrade path: preserve old v1.1.x script cache when the first v3 sync is
+      // attempted offline. The shared bundle has its own last-known-good rollback.
+      const legacyKey = `stories_${title.replace(/\//g, "_")}`;
+      const legacyRaw = await invoke<string | null>("load_from_cache", { key: legacyKey }).catch(() => null);
+      if (legacyRaw) {
+        const story = JSON.parse(legacyRaw) as { script: string; title: string };
+        const bundle = await loadBundle();
+        return {
+          story,
+          bundle,
+          revision: `legacy:${await hashText(story.script)}:${bundle.revision || "unknown"}`,
+          source: "legacy-cache",
+          warning: String(error),
+        };
+      }
+      throw error;
     }
-    if (cached && cached.revision === fresh.revision && cached.validationVersion === ENGINE_ADAPTER_VERSION) {
-      pushLog("info", `[runtime-update] ${title}: unchanged; reuse verified snapshot`);
-      return { ...cached, source: "live" };
-    }
-    // This is the promotion gate: execute the candidate in a disposable iframe
-    // before it is allowed to replace last-known-good on disk.
-    await validateRuntimeBoot(fresh, title);
-    fresh.validationVersion = ENGINE_ADAPTER_VERSION;
-    if (cached && cached.revision !== fresh.revision) {
-      await invoke("save_to_cache", { key: previousKey, data: JSON.stringify(cached) }).catch(() => {});
-    }
-    await invoke("save_to_cache", { key, data: JSON.stringify(fresh) }).catch(() => {});
-    if (!fresh.bundle.module_engine) await refreshEngineDeps();
-    return { ...fresh, source: "live", fallback: cached ?? undefined };
-  } catch (error) {
-    if (cached) {
-      pushLog("warn", `[runtime-update] ${title}: 候选快照验证失败，自动回退`, error);
-      if (!cached.bundle.module_engine) await refreshEngineDeps();
-      return { ...cached, source: "cache", warning: String(error) };
-    }
-    // Upgrade path: preserve old v1.1.x script cache when the first v3 sync is
-    // attempted offline. The shared bundle has its own last-known-good rollback.
-    const legacyKey = `stories_${title.replace(/\//g, "_")}`;
-    const legacyRaw = await invoke<string | null>("load_from_cache", { key: legacyKey }).catch(() => null);
-    if (legacyRaw) {
-      const story = JSON.parse(legacyRaw) as { script: string; title: string };
-      const bundle = await loadBundle();
-      return {
-        story,
-        bundle,
-        revision: `legacy:${await hashText(story.script)}:${bundle.revision || "unknown"}`,
-        source: "legacy-cache",
-        warning: String(error),
-      };
-    }
-    throw error;
+  };
+  if (!force && verified && cached) {
+    const current = storyRuntimePromises.get(title);
+    void refresh().then(runtime => {
+      // Keep the active reader's snapshot stable. Only a later navigation uses
+      // the result of the update check; concurrent callers share that check.
+      if (storyRuntimePromises.get(title) === current) storyRuntimePromises.set(title, Promise.resolve(runtime));
+    }).catch(error => pushLog("warn", `[runtime-update] ${title}: background check failed`, error));
+    reportLoading({ phase: "check", message: "正在读取已验证的本地剧情…" });
+    pushLog("info", `[runtime-cache] ${title}: verified local snapshot read=${Math.round(performance.now() - cacheStart)}ms; check in background`);
+    return { ...cached, source: "verified-cache" };
   }
+  return refresh();
 }
 
 const REQUIRED_DATA_BLOCKS = ["datas_txt", "datas_back", "datas_char", "datas_audio", "datas_link"];
@@ -271,10 +339,10 @@ function validateRuntimeShape(runtime: RawStoryRuntime): string[] {
   return problems;
 }
 
-async function validateRuntimeBoot(runtime: RawStoryRuntime, title: string): Promise<void> {
+async function validateRuntimeBoot(runtime: RawStoryRuntime, title: string, quiet = false): Promise<void> {
   const problems = validateRuntimeShape(runtime);
   if (problems.length) throw new Error(`候选快照结构验证失败: ${problems.join("；")}`);
-  runtime.bundle.metadata_urls = await validateCandidateBoot(runtime.bundle, runtime.story.script, title);
+  runtime.bundle.metadata_urls = await validateCandidateBoot(runtime.bundle, runtime.story.script, title, quiet);
 }
 
 async function validateBundleBoot(bundle: WidgetBundle, title: string): Promise<void> {
@@ -283,15 +351,15 @@ async function validateBundleBoot(bundle: WidgetBundle, title: string): Promise<
   const parsed = new DOMParser().parseFromString(bundle.data_blocks_html, "text/html");
   const script = parsed.getElementById("datas_txt")?.textContent || "";
   if (!script.trim()) throw new Error("候选引擎自带剧情脚本为空");
-  bundle.metadata_urls = await validateCandidateBoot(bundle, script, title);
+  bundle.metadata_urls = await validateCandidateBoot(bundle, script, title, true);
 }
 
-async function validateCandidateBoot(bundle: WidgetBundle, script: string, title: string): Promise<string[]> {
+async function validateCandidateBoot(bundle: WidgetBundle, script: string, title: string, quiet = false): Promise<string[]> {
   const iframe = document.createElement("iframe");
   iframe.style.cssText = "position:fixed;left:-99999px;top:0;width:960px;height:540px;border:0;";
   document.body.appendChild(iframe);
   try {
-    const result = await bootEngineInFrame({ iframe, bundle, script, title, mode: "manifest" });
+    const result = await bootEngineInFrame({ iframe, bundle, script, title, mode: "manifest", onLoading: quiet ? undefined : reportLoading });
     if (!result.health || result.health.globals.length < 4) {
       throw new Error("候选引擎未通过启动健康检查");
     }

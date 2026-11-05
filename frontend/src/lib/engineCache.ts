@@ -9,7 +9,7 @@ export interface PreparedEngine {
   revision: string;
 }
 // Bump whenever the AST bridge or its runtime contract changes.
-export const ENGINE_ADAPTER_VERSION = "native-bridge-v8";
+export const ENGINE_ADAPTER_VERSION = "native-bridge-v17";
 export async function sha256(text: string): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(hash)].map((n) => n.toString(16).padStart(2, "0")).join("");

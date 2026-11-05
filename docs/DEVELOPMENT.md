@@ -16,12 +16,13 @@ resources@GitHub ─jsDelivr/GitHub Raw─▶ 书架元数据/封面    图片�
 - **书架资源**不进入安装包：`BookshelfMetadataContext` 先读 `cache/bookshelf-metadata.json`，每次启动再以 `cache: no-store` 刷新 jsDelivr；网络或格式失败则自动改走 `raw.githubusercontent.com`。只有通过完整校验的响应才会覆盖内存和缓存；双线路都失败时保留旧缓存并显示可重试提示。封面/横幅同样在首选源加载失败后切换另一源，使用哈希文件名并经 `prts-cdn://` 懒加载到内容寻址缓存，因此离线可复用，更新分类或封面无需发版。
 - **PRTS 演出运行时**使用同页原子快照：从同一个响应提取剧情脚本与模块入口，校验并通过隔离启动测试后写入 `story-runtime-v6`，保留上一代快照供失败回滚。`engineModule.ts` 使用 Acorn 按语法结构发现播放器、上下文和预加载 API，不固定上游哈希文件名或压缩变量名；删除入口中的外置 Vue UI 挂载，只桥接演出引擎。无哈希的角色、背景和变量 JSON 每次启动刷新，离线或无效响应回退本地缓存；模块和数据指纹一同决定清单是否失效。Pixi 使用当前 iframe 的资源加载器，使媒体、字体和模块均经过本地协议缓存。
 - **顶部覆盖层**由 `PlayerHUD.tsx` 提供，按游戏的 1280×720 舞台比例缩放，使用客户端 AVG 按钮图标、角点锚定坐标和触摸热区；不挂载 PRTS 的外置工具栏。设置、日志、隐藏、速度与自动调用原引擎控制器；右上“退出”直接离开播放器页面。自动模式按旧版 PRTS 的 400ms 节奏循环显示一至三个箭头。`tools/extract-player-ui.py` 可从官方 APK 复现导出，依赖 UnityPy 1.25.4 和 Pillow；产物来源见 `frontend/src/assets/player-ui/README.md`。
-- **LOG**以独立条目展示角色名与正文，标题和关闭按钮固定，已读记录打开时定位到末尾，全部文本从头查看。`playerTranscript.ts` 保留原脚本行号，按引擎当前行截取已读范围。字号在应用设置页调整并持久化到本地，范围 12–32px，不在播放器中新增字号控件。
+- **LOG 与续播**复用上游 LOG 组件和原生文本解析器，默认显示实际访问过的对白，并单独提供全部文本视图。`playerTranscript.ts` 保存源行、历史光标和各次访问的选项快照；点选已读对白时通过公开 `seekToLine` 接口重建场景并恢复分支。续播记录校验原剧本指纹，剧本变化后不复用旧断点。字号仍在应用设置页调整，范围 12–32px。
+- **已读状态**只接受可见剧情播放器实际到达 `finished` 的完成信号，内部跳转、初始化和停留时长均不算完成。旧计时标记保留，书架改用独立的确认完成记录，并订阅变化即时更新指示灯。
 - **比例与输入**：原版逻辑画布固定为 1280×720，宿主舞台按 16:9 等比居中，宽屏/竖屏留黑边，HUD 与画布共享相同位置和缩放，禁止分别撑满宽高。手动显示“手动”并隐藏倍速框，开启自动后才显示“自动”和速度框。长按场景 350ms 或按住 Ctrl 调用原引擎最高档 `quick_play`；松开、取消触摸、拖动、失焦或离开页面均释放，恢复此前模式与自动速度，并吞掉长按后的额外点击。快进保留选项等待，释放后也不会因选项缓存恢复而继续快进。
 - **移动端稳定性**：桥接层将上游优先 WebGPU 的画布改为 WebGL，关闭 MSAA，初始和旋转/缩放后的渲染分辨率均限制在 1.5 倍以内。剧情清单仍包含全部音频；播放初始化不提前解码整章音频，而由原音频引擎按需加载，图片按两项一批预热，减少解码峰值。
-- **崩溃诊断**：前端环形日志与播放阶段同步保留到本地存储，关键阶段等待 Rust `logs/diagnostics.log` 落盘后才进入 GPU/解码路径；发布版同样启用原生日志。Android 捕获 Java 未处理异常、WebView 渲染进程终止及 API 30+ 历史进程退出原因。渲染进程终止后展示原生导出界面，避免默认处理连带杀死宿主；重启后可在设置或自动打开的恢复日志中复制/导出完整诊断。日志轮换限制大小，不依赖用户提前开启控制台。
+- **崩溃诊断**：前端环形日志与播放阶段同步保留到本地存储，关键阶段等待 Rust `logs/diagnostics.log` 落盘后才进入 GPU/解码路径；发布版同样启用原生日志。Android 捕获 Java 未处理异常、WebView 渲染进程终止及 API 30+ 历史进程退出原因。普通播放阶段残留只保留中性诊断，不推断为崩溃；只有明确记录的播放错误触发恢复提示。渲染进程终止后展示原生导出界面。日志轮换限制大小，可在设置中导出。
 - **慢网络保护**：Wry 0.54.4 的 Android 自定义协议等待上限为 10 秒，超时会 panic。`ensure_playback_asset` 在异步 IPC 中准备引擎、图片、字体和按需音频，再由协议读取本地文件；相同 URL 合并请求、最多四个并行网络下载，图片压缩在阻塞线程池运行。所有协议响应另设独立的 8 秒截止保护，超时返回 504，迟到的响应被丢弃，不再触发 Wry 的 unwrap。
-- **引擎增量缓存**：新版 `StoryPlayer.<hash>.js` 发布入口、CSS 和 polyfill 描述共同标识模块版本；`engineCache.ts` 将桥接器版本、路由作用域和源内容摘要纳入持久化缓存，无更新时跳过依赖重读和 AST 重建。同页快照 revision 与验证版本均未变时不重复验证或写盘；无哈希数据表、旧版依赖及 wiki HTML 用绑定本地内容 SHA 的 ETag / Last-Modified 条件 GET，304 和相同的 200 内容均不重写资源。新数据表仍参与预下载清单版本计算，离线及网络失败保留已验证缓存。
+- **引擎增量缓存**：已验证的本地剧情和数据表可直接启动，后台只查询剧情修订号及官方微件里带哈希的入口、CSS 和 polyfill 描述；版本未变时不下载完整页面或启动隐藏验证。变更候选通过验证后供下次进入使用，当前播放保持稳定。`engineCache.ts` 将桥接版本、路由作用域及内容摘要纳入持久化缓存。无哈希数据表等继续使用条件 GET，离线及检查失败保留已验证缓存。播放设置中的手动重载会绕过会话结果并重新验证、重建引擎。
 - **外部依赖兼容**：每个引擎 iframe 加载 toolbox 后执行 `installEngineCompatibility`，补齐新版工具库删掉、但音频 `fade()` 仍调用的 `Math.clamp`。已有实现保留，兼容补丁不修改应用主窗口。使用 `npm run test:engine` 回归验证；设置 `PRTS_TOOLBOX_FIXTURE=/path/to/krliov.toolbox.js` 可直接校验下载的上游工具库。
 - **预下载同步校验**先批量查询 MediaWiki oldid；只有页面 oldid、全局表哈希和外部引擎哈希全部匹配的 v2 manifest 才会复用。媒体下载与协议缓存会校验文件魔数并原子写入，HTML 错误页、空文件和中断文件会被删除后重新拉取。
 
@@ -72,6 +73,9 @@ npm run test:modules   # ESM 依赖解析、动态 API 桥接和外置 UI 隔离
 npm run test:diagnostics # 进程重启后的日志与检查点恢复、日志大小限制
 npm run test:playback  # 手动/自动、临时快进恢复和选项等待
 npm run test:transcript # LOG 分行、已读范围、字号持久化与边界
+npm run test:resume    # 续播位置、历史光标及选项持久化
+npm run test:read-state # 实际完成判定与旧计时标记迁移
+npm run test:startup   # 本地启动、轻量版本检查及后台刷新竞态
 npm run test:cache     # 引擎持久化复用、版本变动与损坏缓存
 npm ci --prefix tools/gen-index --no-audit --no-fund
 npm run test:resources # 资源快速探测、自动发现、仅变化资源下载
@@ -169,6 +173,7 @@ scripts/run-tests.sh     # 以上全部
 
 - **CI**（`.github/workflows/ci.yml`）：每次 push / PR 运行静态检查；push 时额外为各平台构建安装包并作为 Workflow 产物上传（即「CI 版」）。
 - **Release**（`.github/workflows/release.yml`）：推送 `v*` 版本标签时，为 Android(arm64-v8a APK) / Windows / macOS(Intel + Apple Silicon) / Linux 构建并上传到对应 GitHub Release 草稿的 Assets，核对构建结果、签名和发布说明后再正式发布。标签含连字符（如 `v1.0.0-beta.1`）发布为 **pre-release**。
+- Android Release 必须配置固定签名所需的 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 和 `ANDROID_KEY_PASSWORD`。工作流核对 APK 签名指纹、应用包名和版本号，并自动上传 APK 及 SHA-256 文件；缺少密钥或产物时直接失败，不手动补传本地 APK。
 - **书架资源自动更新**（`.github/workflows/update-storylines.yml`）：北京时间每天 22:00（UTC `0 14 * * *`）及手动触发。先用少量批量请求检查 wiki 修订号、活动数据、KV Git blob SHA 和图片 SHA；无变化时跳过 npm、图像工具、资源分支检出、图片下载和发布。有变化时按内容签名复用旧产物，只转换变动图片，发布到独立 `resources` 分支。平台调度可能受队列影响。工作流仅在 resources 分支提交分类和图像更新，不直接向 master 提交。
 
 本地生成同一份资源负载：

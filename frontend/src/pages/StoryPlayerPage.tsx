@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { bootEngineInFrame } from "../lib/engineBoot";
-import { loadStoryRuntime } from "../lib/predownload";
+import { loadStoryRuntime, reloadStoryRuntime } from "../lib/predownload";
 import { setReading } from "../lib/keepalive";
 import { useCompression } from "../lib/CompressionContext";
 import { markRead, setLastWatched } from "../lib/readState";
 import { setLandscape } from "../lib/orientation";
 import { setImmersive } from "../lib/immersive";
 import type { PlayerController } from "../lib/modernEngine";
+import { reloadModernEngine } from "../lib/modernEngine";
 import PlayerHUD from "../components/PlayerHUD";
 import { playbackCheckpoint, pushLog } from "../lib/debugLog";
 import { reportLoading, useLoadingProgress } from "../lib/loadingProgress";
@@ -28,7 +29,8 @@ export default function StoryPlayerPage() {
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
   const controllerRef = useRef<PlayerController | null>(null);
   const [controller, setController] = useState<PlayerController | null>(null);
-  const [storyScript, setStoryScript] = useState("");
+  const [generation, setGeneration] = useState(0);
+  const reloadRequested = useRef(false);
 
   const decodedTitle = pageTitle ? decodeURIComponent(pageTitle) : "";
   const { busy: compressionBusy } = useCompression();
@@ -47,13 +49,10 @@ export default function StoryPlayerPage() {
     return () => setReading(false);
   }, []);
 
-  // Record this as the "last watched" story on entry; only mark it READ after
-  // 30s in the reader (so merely peeking in doesn't count). Leaving early cancels.
+  // Opening records last-watched only. Completion comes from the engine below.
   useEffect(() => {
     if (!decodedTitle) return;
     setLastWatched(decodedTitle);
-    const t = setTimeout(() => markRead(decodedTitle), 30_000);
-    return () => clearTimeout(t);
   }, [decodedTitle]);
 
   // The player is the ONLY screen forced to landscape AND the only one that hides
@@ -72,6 +71,8 @@ export default function StoryPlayerPage() {
 
     let cancelled = false;
     const container = containerRef.current;
+    const force = reloadRequested.current;
+    reloadRequested.current = false;
     setLoading(true);
     setError(null);
     setSyncWarning(null);
@@ -82,9 +83,9 @@ export default function StoryPlayerPage() {
         // Script + engine/data tables come from the same fresh PRTS response. If
         // refresh fails, a validated last-known-good snapshot is retained visibly.
         setStatus(`正在同步剧情与演出引擎: ${decodedTitle}...`);
-        const runtime = await loadStoryRuntime(decodedTitle);
-        setStoryScript(runtime.story.script);
-        if (runtime.source !== "live") {
+        if (force) reloadModernEngine();
+        const runtime = await (force ? reloadStoryRuntime(decodedTitle) : loadStoryRuntime(decodedTitle));
+        if (runtime.source !== "live" && runtime.source !== "verified-cache") {
           setSyncWarning("PRTS 同步失败，当前使用上次验证成功的离线快照；建议联网后重新进入。\n" + (runtime.warning || ""));
         }
         if (cancelled) return;
@@ -104,9 +105,11 @@ export default function StoryPlayerPage() {
             script: runtime.story.script,
             title: decodedTitle,
             mode: "play",
+            preferCachedMetadata: runtime.source !== "live",
             isCancelled: () => cancelled,
             onStatus: (message) => { setStatus(message); if (!runtime.bundle.module_engine) reportLoading({ phase: "initialize", message }); },
             onFatal: setError,
+            onCompleted: () => markRead(decodedTitle),
           });
         } catch (candidateError) {
           if (!runtime.fallback || cancelled) throw candidateError;
@@ -123,11 +126,12 @@ export default function StoryPlayerPage() {
             script: runtime.fallback.story.script,
             title: decodedTitle,
             mode: "play",
+            preferCachedMetadata: true,
             isCancelled: () => cancelled,
             onStatus: (message) => { setStatus(message); if (!runtime.fallback!.bundle.module_engine) reportLoading({ phase: "initialize", message }); },
             onFatal: setError,
+            onCompleted: () => markRead(decodedTitle),
           });
-          setStoryScript(runtime.fallback.story.script);
         }
 
         if (boot.audit?.missing.length) {
@@ -165,17 +169,24 @@ export default function StoryPlayerPage() {
       }
       container.innerHTML = "";
     };
-  }, [decodedTitle]);
+  }, [decodedTitle, generation]);
 
   // Pop one history level (back to the 章节 detail we came from), so hardware
   // back and this button behave identically.
   const handleBack = () => navigate(-1);
+  const handleReload = () => {
+    reloadRequested.current = true;
+    setError(null); setLoading(true); setController(null);
+    reportLoading({ phase: "check", message: "正在重载播放引擎…" });
+    setGeneration(value => value + 1);
+  };
 
   if (error) {
     return (
       <div style={centerStyle}>
         <div style={{ color: "#f44336", marginBottom: "16px" }}>加载失败: {error}</div>
         <button onClick={handleBack} style={btnStyle}>返回</button>
+        <button onClick={handleReload} style={btnStyle}>重载播放引擎</button>
       </div>
     );
   }
@@ -185,7 +196,7 @@ export default function StoryPlayerPage() {
       {!controller && <button onClick={handleBack} style={backBtnStyle} aria-label="返回" title="返回">◀</button>}
 
       {controller && !loading && (
-        <PlayerHUD controller={controller} script={storyScript} onExit={handleBack} onError={setSyncWarning} />
+        <PlayerHUD controller={controller} onExit={handleBack} onError={setSyncWarning} onReload={handleReload} />
       )}
 
       {syncWarning && (

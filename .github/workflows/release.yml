@@ -84,8 +84,7 @@ jobs:
   # Android isn't a tauri-action target, so build the per-ABI APKs separately and
   # attach it to the same release. Ships arm64-v8a only (real 64-bit phones);
   # x86_64 (emulator) and 32-bit are dropped — no real target needs them. Signed
-  # with the real keystore when the ANDROID_KEYSTORE_* secrets are set, otherwise
-  # debug-signed (still installs).
+  # with the repository's fixed keystore so upgrades preserve app data.
   android:
     name: Release (Android arm64-v8a)
     runs-on: ubuntu-22.04
@@ -128,23 +127,19 @@ jobs:
         shell: bash
         run: rm -f package-lock.json && npm install --no-audit --no-fund
 
-      # Restore the signing keystore from a secret when present. Unset → the Gradle
-      # release type falls back to debug signing (build.gradle.kts), so the APK
-      # still installs on a device. To enable real signing, set repo secrets:
+      # Release builds require a fixed key; never silently generate a different
+      # debug key on a fresh runner. Configure the repository secrets:
       # ANDROID_KEYSTORE_BASE64 (`base64 -w0 prts-release.jks`), ANDROID_KEYSTORE_PASSWORD,
       # ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.
-      - name: Restore release keystore (optional)
+      - name: Restore release keystore
         id: keystore
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
-            echo "path=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
-            echo "Release keystore restored — signing with the real key."
-          else
-            echo "No ANDROID_KEYSTORE_BASE64 secret — falling back to debug signing."
-          fi
+          test -n "$KEYSTORE_B64" || { echo "::error::Configure ANDROID_KEYSTORE_BASE64 before publishing an Android release"; exit 1; }
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "path=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
 
       - name: Build arm64-v8a release APK
         env:
@@ -166,10 +161,27 @@ jobs:
           cp "$arm" "dist-apk/arkstage-${{ github.ref_name }}-android-arm64-v8a.apk"
           ls -lh dist-apk
 
+      - name: Verify APK signature and version
+        env:
+          # Public fingerprint of the key used by the existing installable APKs.
+          EXPECTED_CERT_SHA256: 5049b13a0c021e27282d9b3ef658eabff048401e5719d23c9e9c59284539a57c
+        run: |
+          apk="dist-apk/arkstage-${{ github.ref_name }}-android-arm64-v8a.apk"
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          "$tools/apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apk-signature.txt"
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apk-signature.txt")
+          test "$actual" = "$EXPECTED_CERT_SHA256" || { echo "::error::APK signing certificate does not match the existing app"; exit 1; }
+          "$tools/aapt" dump badging "$apk" | tee "$RUNNER_TEMP/apk-badging.txt"
+          version="${GITHUB_REF_NAME#v}"
+          grep -F "versionName='$version'" "$RUNNER_TEMP/apk-badging.txt"
+          grep -F "package: name='cn.aunly.arkstage'" "$RUNNER_TEMP/apk-badging.txt"
+          (cd dist-apk && sha256sum "$(basename "$apk")" > "$(basename "$apk").sha256")
+
       - name: Attach APKs to the release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: dist-apk/*.apk
+          fail_on_unmatched_files: true
+          files: dist-apk/*

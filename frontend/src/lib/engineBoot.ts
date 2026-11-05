@@ -3,6 +3,7 @@ import { PROXY_BASE, discoverAssetDomains, proxyUrl, rewriteAllCdnUrls } from ".
 import { captureIframe, pushLog } from "./debugLog";
 import { installEngineCompatibility } from "./engineCompatibility";
 import { bootModernEngineInFrame, type ModuleEngine, type PlayerController } from "./modernEngine";
+import type { LoadingProgress } from "./loadingProgress";
 import { scenarioLinkOverrides, type ScenarioLinkOverride } from "./BookshelfMetadataContext";
 
 /**
@@ -48,10 +49,15 @@ export interface FrameBootOptions {
   /** Page title, written into #firstHeading (read by data.init()). */
   title: string;
   mode: "play" | "manifest";
+  /** A validated local script can start from local metadata while refreshing. */
+  preferCachedMetadata?: boolean;
+  onLoading?: (progress: LoadingProgress) => void;
   /** Polled between async steps so a cancelled boot can bail early. */
   isCancelled?: () => boolean;
   onStatus?: (status: string) => void;
   onFatal?: (message: string) => void;
+  /** Fired only after real playback reaches its terminal state. */
+  onCompleted?: () => void;
 }
 
 export interface FrameBootResult {
