@@ -42,6 +42,9 @@ pub struct StoryRuntimeData {
     pub bundle: WidgetBundleData,
     /// SHA-256 of script + widget snapshot. Used to invalidate manifests.
     pub revision: String,
+    /// MediaWiki source revision paired with the rendered snapshot.
+    #[serde(default)]
+    pub page_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

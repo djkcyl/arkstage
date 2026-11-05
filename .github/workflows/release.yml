@@ -11,10 +11,85 @@ on:
 
 permissions:
   contents: write
+  checks: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  prepare:
+    name: Validate release and prepare draft
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    outputs:
+      release_id: ${{ steps.draft.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate tag, versions, notes and reviewed source
+        run: |
+          node scripts/verify-release.mjs --tag "$GITHUB_REF_NAME"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master
+      - name: Require successful master checks and prepare one draft
+        id: draft
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { pathToFileURL } = require('url');
+            const { validateSignerContinuity } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/verify-release.mjs`).href);
+            const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+            const tag = `v${version}`;
+            const signing = JSON.parse(fs.readFileSync('config/android-signing.json', 'utf8'));
+            const notes = fs.readFileSync(`docs/releases/${tag}.md`, 'utf8');
+            let existing;
+            try { existing = (await github.rest.repos.getReleaseByTag({ ...context.repo, tag })).data; }
+            catch (error) { if (error.status !== 404) throw error; }
+            if (existing && (!existing.draft || (/^[a-f0-9]{40}$/.test(existing.target_commitish) && existing.target_commitish !== context.sha))) {
+              throw new Error('This tag is already published or its draft belongs to a different commit; do not overwrite it');
+            }
+            let previous;
+            try {
+              const latest = (await github.rest.repos.getLatestRelease(context.repo)).data;
+              const manifest = latest.assets.find(asset => asset.name.endsWith('-android-signing.json'));
+              if (manifest) {
+                if (manifest.uploader.login !== 'github-actions[bot]') throw new Error('Previous signing manifest was not uploaded by Actions');
+                const response = await fetch(manifest.browser_download_url);
+                if (!response.ok) throw new Error(`Previous signing manifest download failed: ${response.status}`);
+                previous = await response.json();
+              }
+            } catch (error) { if (error.status !== 404) throw error; }
+            validateSignerContinuity(signing, previous, version);
+            const deadline = Date.now() + 15 * 60 * 1000;
+            let checked = false;
+            while (Date.now() < deadline) {
+              const checks = (await github.rest.checks.listForRef({ ...context.repo, ref: context.sha, per_page: 100 })).data.check_runs
+                .filter(check => check.name === 'Static checks' && check.app?.slug === 'github-actions');
+              if (checks.length && checks.every(check => check.status === 'completed')) {
+                if (checks.some(check => check.conclusion !== 'success')) throw new Error('Master static checks failed; release blocked');
+                checked = true; break;
+              }
+              core.info('Waiting for master static checks before building the release');
+              await new Promise(resolve => setTimeout(resolve, 20000));
+            }
+            if (!checked) throw new Error('Timed out waiting for master static checks');
+            const fields = { ...context.repo, tag_name: tag, target_commitish: context.sha,
+              name: `方舟剧场 ${tag}`, body: notes, draft: true, prerelease: version.includes('-') };
+            const release = existing
+              ? (await github.rest.repos.updateRelease({ ...fields, release_id: existing.id })).data
+              : (await github.rest.repos.createRelease(fields)).data;
+            core.setOutput('release_id', release.id);
+            await core.summary.addLink('Release draft', release.html_url).write();
+
   release:
     name: Release (${{ matrix.platform }} ${{ matrix.args }})
+    needs: prepare
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -74,9 +149,7 @@ jobs:
           # (users can still enable it in Settings).
           VITE_DEBUG_DEFAULT: "false"
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "方舟剧场 ${{ github.ref_name }}"
-          releaseBody: "从下方 Assets 下载对应平台的安装包。"
+          releaseId: ${{ needs.prepare.outputs.release_id }}
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
@@ -84,10 +157,11 @@ jobs:
   # Android isn't a tauri-action target, so build the per-ABI APKs separately and
   # attach it to the same release. Ships arm64-v8a only (real 64-bit phones);
   # x86_64 (emulator) and 32-bit are dropped — no real target needs them. Signed
-  # with the real keystore when the ANDROID_KEYSTORE_* secrets are set, otherwise
-  # debug-signed (still installs).
+  # with the repository's fixed keystore so upgrades preserve app data.
   android:
     name: Release (Android arm64-v8a)
+    needs: prepare
+    timeout-minutes: 60
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -128,23 +202,29 @@ jobs:
         shell: bash
         run: rm -f package-lock.json && npm install --no-audit --no-fund
 
-      # Restore the signing keystore from a secret when present. Unset → the Gradle
-      # release type falls back to debug signing (build.gradle.kts), so the APK
-      # still installs on a device. To enable real signing, set repo secrets:
+      # Release builds require a fixed key; never silently generate a different
+      # debug key on a fresh runner. Configure the repository secrets:
       # ANDROID_KEYSTORE_BASE64 (`base64 -w0 prts-release.jks`), ANDROID_KEYSTORE_PASSWORD,
       # ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.
-      - name: Restore release keystore (optional)
+      - name: Restore release keystore
         id: keystore
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
-            echo "path=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
-            echo "Release keystore restored — signing with the real key."
-          else
-            echo "No ANDROID_KEYSTORE_BASE64 secret — falling back to debug signing."
-          fi
+          test -n "$KEYSTORE_B64" || { echo "::error::Configure ANDROID_KEYSTORE_BASE64 before publishing an Android release"; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" && test -n "$ANDROID_KEY_ALIAS" && test -n "$ANDROID_KEY_PASSWORD"
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+          expected_alias=$(node -p "require('./config/android-signing.json').keyAlias")
+          test "$ANDROID_KEY_ALIAS" = "$expected_alias"
+          keytool -J-Duser.language=en -list -v -keystore "$RUNNER_TEMP/release.p12" -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" > "$RUNNER_TEMP/key-certificate.txt"
+          expected=$(node -p "require('./config/android-signing.json').certificateSha256")
+          actual=$(sed -n 's/.*SHA256: //p' "$RUNNER_TEMP/key-certificate.txt" | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          test "$actual" = "$expected" || { echo "::error::Configured key differs from the permanent signing policy"; exit 1; }
+          echo "path=$RUNNER_TEMP/release.p12" >> "$GITHUB_OUTPUT"
 
       - name: Build arm64-v8a release APK
         env:
@@ -166,10 +246,83 @@ jobs:
           cp "$arm" "dist-apk/arkstage-${{ github.ref_name }}-android-arm64-v8a.apk"
           ls -lh dist-apk
 
+      - name: Verify APK signature and version
+        run: |
+          apk="dist-apk/arkstage-${{ github.ref_name }}-android-arm64-v8a.apk"
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          expected=$(node -p "require('./config/android-signing.json').certificateSha256")
+          "$tools/apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apk-signature.txt"
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apk-signature.txt")
+          test "$actual" = "$expected" || { echo "::error::APK signing certificate differs from the permanent release identity"; exit 1; }
+          "$tools/aapt" dump badging "$apk" | tee "$RUNNER_TEMP/apk-badging.txt"
+          version="${GITHUB_REF_NAME#v}"
+          grep -F "versionName='$version'" "$RUNNER_TEMP/apk-badging.txt"
+          grep -F "package: name='cn.aunly.arkstage'" "$RUNNER_TEMP/apk-badging.txt"
+          (cd dist-apk && sha256sum "$(basename "$apk")" > "$(basename "$apk").sha256")
+          node -e "const fs=require('fs');fs.writeFileSync('dist-apk/arkstage-${{ github.ref_name }}-android-signing.json',JSON.stringify({...require('./config/android-signing.json'),version:require('./package.json').version},null,2)+'\n')"
+
       - name: Attach APKs to the release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: dist-apk/*.apk
+          fail_on_unmatched_files: true
+          files: dist-apk/*
+
+  publish:
+    name: Verify all assets and publish
+    needs: [prepare, release, android]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Verify Actions provenance, completeness and uploaded APK checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$GH_REPO/releases/tags/$GITHUB_REF_NAME" > release-assets.json
+          node scripts/verify-release.mjs --tag "$GITHUB_REF_NAME" --assets-json release-assets.json
+          dir="$RUNNER_TEMP/release-verify"
+          mkdir -p "$dir"
+          gh release download "$GITHUB_REF_NAME" --dir "$dir" \
+            --pattern "arkstage-$GITHUB_REF_NAME-android-arm64-v8a.apk" \
+            --pattern "arkstage-$GITHUB_REF_NAME-android-arm64-v8a.apk.sha256" \
+            --pattern "arkstage-$GITHUB_REF_NAME-android-signing.json"
+          (cd "$dir" && sha256sum -c "arkstage-$GITHUB_REF_NAME-android-arm64-v8a.apk.sha256")
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          import { readRelease, validateSignerContinuity } from './scripts/verify-release.mjs';
+          const current = readRelease(process.cwd());
+          const tag = process.env.GITHUB_REF_NAME;
+          const dir = `${process.env.RUNNER_TEMP}/release-verify`;
+          const published = JSON.parse(fs.readFileSync(`${dir}/arkstage-${tag}-android-signing.json`, 'utf8'));
+          validateSignerContinuity(current.signing, published, current.versions.package);
+          if (published.version !== current.versions.package) throw Error('Uploaded signer manifest version differs');
+          const name = `arkstage-${tag}-android-arm64-v8a.apk`;
+          const asset = JSON.parse(fs.readFileSync('release-assets.json', 'utf8')).assets.find(asset => asset.name === name);
+          const digest = `sha256:${crypto.createHash('sha256').update(fs.readFileSync(`${dir}/${name}`)).digest('hex')}`;
+          if (asset.digest !== digest) throw Error('Downloaded APK differs from GitHub server digest');
+          console.log('All platforms and the Actions-built APK passed publication checks');
+          JS
+      - name: Publish the verified draft
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const tag = context.ref.replace('refs/tags/', '');
+            const release = (await github.rest.repos.getReleaseByTag({ ...context.repo, tag })).data;
+            let object = (await github.rest.git.getRef({ ...context.repo, ref: `tags/${tag}` })).data.object;
+            while (object.type === 'tag') object = (await github.rest.git.getTag({ ...context.repo, tag_sha: object.sha })).data.object;
+            if (!release.draft || release.id !== Number('${{ needs.prepare.outputs.release_id }}') || object.sha !== context.sha) {
+              throw new Error('Draft or tag identity changed; publication blocked');
+            }
+            const published = (await github.rest.repos.updateRelease({ ...context.repo, release_id: release.id,
+              body: fs.readFileSync(`docs/releases/${tag}.md`, 'utf8'), draft: false,
+              make_latest: tag.includes('-') ? 'false' : 'true' })).data;
+            await core.summary.addHeading('Release published').addLink(tag, published.html_url).write();

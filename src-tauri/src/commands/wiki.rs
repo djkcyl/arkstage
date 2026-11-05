@@ -119,6 +119,7 @@ pub async fn fetch_page_revisions(titles: Vec<String>) -> Result<HashMap<String,
         let joined = chunk.join("|");
         let json: serde_json::Value = crate::net::client()
             .get(_WIKI_API)
+            .timeout(Duration::from_secs(8))
             .query(&[
                 ("action", "query"),
                 ("prop", "revisions"),
@@ -148,8 +149,67 @@ pub async fn fetch_page_revisions(titles: Vec<String>) -> Result<HashMap<String,
                 result.insert(title.to_string(), revision.to_string());
             }
         }
+        // Preserve callers' spellings, including underscores and redirected titles.
+        for _ in 0..8 {
+            for kind in ["redirects", "normalized"] {
+                if let Some(aliases) = json
+                    .pointer(&format!("/query/{kind}"))
+                    .and_then(|v| v.as_array())
+                {
+                    for alias in aliases {
+                        if let (Some(from), Some(to)) =
+                            (alias["from"].as_str(), alias["to"].as_str())
+                        {
+                            if let Some(value) = result.get(to).cloned() {
+                                result.insert(from.into(), value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     Ok(result)
+}
+
+/// The widget definition is about 2 KB and names the hashed entry/CSS versions.
+/// Page oldids alone cannot detect independently published player releases.
+#[tauri::command]
+pub async fn fetch_engine_version() -> Result<crate::models::ModuleEngine, String> {
+    crate::net::ensure_online()?;
+    let json: serde_json::Value = crate::net::client()
+        .get(_WIKI_API)
+        .timeout(Duration::from_secs(8))
+        .query(&[
+            ("action", "query"),
+            ("prop", "revisions"),
+            ("rvprop", "content"),
+            ("rvslots", "main"),
+            ("titles", "Widget:StoryPlayer"),
+            ("format", "json"),
+            ("formatversion", "2"),
+        ])
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    let source = json
+        .pointer("/query/pages/0/revisions/0/slots/main/content")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing player version definition")?;
+    story_page::extract_widget_html(source)
+        .module_engine
+        .ok_or("Missing hashed player entry".into())
+}
+
+fn rendered_page_revision(html: &str) -> Option<String> {
+    let tail = html.split_once("\"wgRevisionId\":")?.1.trim_start();
+    let value: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+    (!value.is_empty() && value != "0").then_some(value)
 }
 
 /// Fetch a single story page and extract its script.
@@ -182,6 +242,7 @@ pub async fn fetch_story_runtime(page_title: String) -> Result<StoryRuntimeData,
         story,
         bundle,
         revision,
+        page_revision: rendered_page_revision(&html),
     })
 }
 
@@ -331,6 +392,20 @@ fn sha256_parts(parts: &[&[u8]]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn revision_is_paired_with_rendered_page_not_a_later_query() {
+        assert_eq!(
+            rendered_page_revision(r#"RLCONF={"wgRevisionId":447935,"other":0}"#),
+            Some("447935".into())
+        );
+        assert_eq!(
+            rendered_page_revision(r#"{"wgRevisionId": 17}"#),
+            Some("17".into())
+        );
+        assert_eq!(rendered_page_revision("no revision"), None);
+        assert_eq!(rendered_page_revision(r#"{"wgRevisionId":0}"#), None);
+    }
 
     #[test]
     fn module_runtime_does_not_require_classic_engine_globals_or_tables() {

@@ -42,7 +42,7 @@ export default function DebugConsole() {
         style={{ ...toggleStyle, background: errorCount ? "#b71c1c" : "rgba(0,0,0,0.6)" }}
         title="查看调试日志"
       >
-        {getInterruptedPlayback() ? "上次阅读异常 · " : ""}调试日志{errorCount ? ` (${errorCount})` : entries.length ? ` ·${entries.length}` : ""}
+        {getInterruptedPlayback() ? "上次播放错误 · " : ""}调试日志{errorCount ? ` (${errorCount})` : entries.length ? ` ·${entries.length}` : ""}
       </button>
     );
   }
@@ -60,7 +60,7 @@ export default function DebugConsole() {
       </div>
       <div style={listStyle}>
         {message && <div role="status">{message}</div>}
-        {getInterruptedPlayback() && <div style={{ color: "#ffd166" }}>上次阅读未正常结束。此处保留了最后播放阶段，复制或导出可包含原生退出信息。</div>}
+        {getInterruptedPlayback() && <div style={{ color: "#ffd166" }}>上次播放记录过错误。诊断日志已保留，可复制或导出查看详情。</div>}
         {entries.length === 0 && <div style={{ color: "#888" }}>暂无日志</div>}
         {entries.map((e) => (
           <div key={e.id} style={{ color: levelColor(e.level), whiteSpace: "pre-wrap", marginBottom: 4 }}>

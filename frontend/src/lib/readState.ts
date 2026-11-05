@@ -1,26 +1,36 @@
-// Tracks which stories the user has opened in the player ("read"), so the
-// bookshelf can distinguish read vs unread chapters. Persisted in localStorage
+// Tracks stories confirmed complete by the player, so the
+// bookshelf can distinguish completed vs unfinished chapters. Persisted in localStorage
 // (independent of the download cache — a story can be read without being cached,
 // or cached without being read).
 
-const KEY = "arkstage-read-stories";
+// Keep the old timed markers intact, but never treat them as completion evidence.
+const KEY = "arkstage-completed-stories-v2";
+const CHANGE_EVENT = "arkstage-reading-state-changed";
+function notify() { if (typeof window !== "undefined") window.dispatchEvent(new Event(CHANGE_EVENT)); }
+export function subscribeReadState(listener: () => void): () => void {
+  window.addEventListener(CHANGE_EVENT, listener);
+  window.addEventListener("storage", listener);
+  return () => { window.removeEventListener(CHANGE_EVENT, listener); window.removeEventListener("storage", listener); };
+}
 
 export function getReadStories(): Set<string> {
   try {
     const raw = localStorage.getItem(KEY);
-    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+    const values: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(values) ? values.filter((value): value is string => typeof value === "string") : []);
   } catch {
     return new Set();
   }
 }
 
-/** Mark one story (by page_title) as read; persists immediately. */
+/** Record confirmed playback completion; persists immediately. */
 export function markRead(pageTitle: string): void {
   try {
     const s = getReadStories();
     if (s.has(pageTitle)) return;
     s.add(pageTitle);
     localStorage.setItem(KEY, JSON.stringify([...s]));
+    notify();
   } catch {
     /* storage unavailable — read state is best-effort */
   }
@@ -41,6 +51,7 @@ export function getLastWatched(): string | null {
 export function setLastWatched(pageTitle: string): void {
   try {
     localStorage.setItem(LAST_KEY, pageTitle);
+    notify();
   } catch {
     /* best-effort */
   }

@@ -114,23 +114,21 @@ uninstall. There is **no** in-app directory picker on Android (the Settings
 JNI call to `Context.getExternalFilesDir(null)`; if external storage is somehow
 unavailable, the app falls back to internal app-data so it still runs.
 
-## Release signing (when ready)
+## Release signing
 
-The release path is wired but disabled — no keystore is generated or committed.
-To cut a signed release:
+Starting with v1.3.1, use the permanent identity in `config/android-signing.json`
+for every release. Its private key is stored in Actions Secrets with a restricted
+local recovery copy in `.release-signing/`; neither is committed. For a local
+signed diagnostic build, point Gradle at the established key:
 
 ```bash
-# 1. Generate a keystore (once)
-keytool -genkey -v -keystore prts-release.jks -keyalg RSA -keysize 2048 \
-  -validity 10000 -alias prts
-
-# 2. Point the build at it via env vars
-export ANDROID_KEYSTORE_PATH=/abs/path/to/prts-release.jks
+# Point the build at the existing keystore via env vars
+export ANDROID_KEYSTORE_PATH=/abs/path/to/arkstage-release.p12
 export ANDROID_KEYSTORE_PASSWORD=…
-export ANDROID_KEY_ALIAS=prts
+export ANDROID_KEY_ALIAS=arkstage-release
 export ANDROID_KEY_PASSWORD=…
 
-# 3. Build a release APK
+# Build a release APK
 RELEASE=1 scripts/build-android.sh
 ```
 
@@ -151,28 +149,46 @@ devices); 32-bit is dropped by design.
   artifact (`arkstage-android-<sha>`). Debug-signed (no keystore in CI), but
   installable for testing.
 - **`.github/workflows/release.yml`** — `android` job: on a `v*` tag, builds the
-  two APKs and attaches them to the GitHub Release as
-  `arkstage-<tag>-android-arm64-v8a.apk` / `…-x86_64.apk`.
+  arm64-v8a APK, verifies its certificate, package name and version, then attaches
+  `arkstage-<tag>-android-arm64-v8a.apk`, its `.sha256` file, and
+  `arkstage-<tag>-android-signing.json` to the draft Release. A separate final job
+  requires every platform's assets, Actions provenance and matching server digest
+  before publishing the draft.
 
-Both run `npm run tauri android build -- --apk --target aarch64 --target x86_64
---split-per-abi` after setting up JDK 21, the Android SDK + NDK 27.2.12479018
-(`android-actions/setup-android` + `sdkmanager`), and the two Rust Android
-targets.
+Both set up JDK 21, the Android SDK + NDK 27.2.12479018 and the required Rust
+targets. CI builds both ABIs; Release uses
+`npm run tauri android build -- --apk --target aarch64 --split-per-abi`.
 
-**Release signing in CI** is optional. Set these repository secrets to sign with
-your real keystore (otherwise the build falls back to debug signing):
+**Release signing in Actions** requires these repository secrets. Missing keys,
+an unexpected certificate or a missing APK fail the release job rather than
+silently producing a new signing identity:
 
 | Secret | Value |
 | --- | --- |
-| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 prts-release.jks` |
+| `ANDROID_KEYSTORE_BASE64` | Base64 of the established PKCS12 keystore |
 | `ANDROID_KEYSTORE_PASSWORD` | keystore password |
-| `ANDROID_KEY_ALIAS` | key alias (e.g. `prts`) |
+| `ANDROID_KEY_ALIAS` | `arkstage-release` |
 | `ANDROID_KEY_PASSWORD` | key password |
 
 The release job decodes `ANDROID_KEYSTORE_BASE64` to a file and exports the
-`ANDROID_KEYSTORE_*` env vars that `build.gradle.kts` reads.
+`ANDROID_KEYSTORE_*` env vars that `build.gradle.kts` reads. Its public certificate
+fingerprint is pinned in `config/android-signing.json`; preserve this identity when
+updating the workflow. APK construction and upload are performed by Actions,
+not by manually uploading a local build.
 
-This phase intentionally ships only the local script + this doc.
+Historical v1.1.4 and v1.1.5 used different runner debug certificates and their
+private keys were not retained. The owner authorized a new permanent identity
+for v1.3.1. This is an explicit signing migration: old releases and test APKs
+require backing up needed data, uninstalling, and reinstalling once. Subsequent
+releases must match the v1.3.1 identity. The published signing manifest is checked
+automatically, so changing a key or a public fingerprint alone cannot silently
+break future upgrades.
+
+The setup helper runs only for an explicitly authorized initial provisioning;
+it is never part of CI. Existing-policy or partial-backup states prohibit new
+generation. Restore the existing backup rather than regenerating. Preserve the
+entire private recovery directory in a separate secure backup; do not put it in
+source control, a public artifact, or a Release. Cleanup scripts exclude it.
 
 ## Empirical verification results
 

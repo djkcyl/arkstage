@@ -28,8 +28,12 @@ const saved = readStored(JOURNAL_KEY);
 const entries: LogEntry[] = Array.isArray(saved) ? saved.filter((e): e is LogEntry => e && typeof e.time === "number"
   && typeof e.msg === "string" && ["log", "info", "warn", "error"].includes(e.level)).slice(-MAX_ENTRIES) : [];
 const previous = readStored(CHECKPOINT_KEY) as PlaybackCheckpoint | null;
-let interrupted: PlaybackCheckpoint | null = previous && typeof previous.title === "string" && typeof previous.stage === "string"
+const lastPlayback = previous && typeof previous.title === "string" && typeof previous.stage === "string"
   && typeof previous.time === "number" ? previous : null;
+// A missing JS teardown also happens on ordinary Android process stops. Only an
+// explicitly recorded failure warrants a recovery alert; ready/preload are breadcrumbs.
+let interrupted: PlaybackCheckpoint | null = lastPlayback && ["failed", "context-lost"].includes(lastPlayback.stage)
+  ? lastPlayback : null;
 const listeners = new Set<() => void>();
 let seq = 0;
 for (const entry of entries) entry.id = seq++;
@@ -53,7 +57,7 @@ export function getInterruptedPlayback(): PlaybackCheckpoint | null { return int
 export async function playbackCheckpoint(title: string, stage: string, detail = ""): Promise<void> {
   const checkpoint = { title, stage, time: Date.now() };
   try {
-    if (["disposed", "cancelled", "failed"].includes(stage)) localStorage.removeItem(CHECKPOINT_KEY);
+    if (["disposed", "cancelled"].includes(stage)) localStorage.removeItem(CHECKPOINT_KEY);
     else localStorage.setItem(CHECKPOINT_KEY, JSON.stringify(checkpoint));
   } catch { /* Continue with the native journal. */ }
   const message = `[playback] ${title} stage=${stage}${detail ? ` ${detail}` : ""}`;
@@ -116,7 +120,8 @@ export function installGlobalCapture(): void {
   if (installed) return;
   installed = true;
 
-  if (interrupted) pushLog("warn", "[recovery] 上次阅读未正常结束，最后阶段:", interrupted);
+  if (interrupted) pushLog("warn", "[recovery] 上次播放曾记录错误:", interrupted);
+  else if (lastPlayback) pushLog("info", "[session] 上次播放阶段（不代表异常退出）:", lastPlayback);
   try { localStorage.removeItem(CHECKPOINT_KEY); } catch { /* ignore */ }
   pushLog("info", "[session]", navigator.userAgent, `viewport=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`);
 
